@@ -27,12 +27,16 @@ export function RevealView({ lobbyId, pageSrc, width, height }: RevealViewProps)
       if (!canvas) return;
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
+      ctx.globalCompositeOperation = "source-over";
       ctx.clearRect(0, 0, width, height);
       ctx.fillStyle = "#ffffff";
       ctx.fillRect(0, 0, width, height);
       if (halfA) ctx.drawImage(halfA, 0, 0, width, height);
       if (halfB) ctx.drawImage(halfB, 0, 0, width, height);
+      // Multiply so the (opaque white) line-art background doesn't cover the halves.
+      ctx.globalCompositeOperation = "multiply";
       ctx.drawImage(line, 0, 0, width, height);
+      ctx.globalCompositeOperation = "source-over";
       setStatus("ready");
     } catch {
       setStatus("error");

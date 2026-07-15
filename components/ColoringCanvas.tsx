@@ -106,11 +106,16 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
       if (!display || !paint || !line) return;
       const ctx = display.getContext("2d");
       if (!ctx) return;
+      ctx.globalCompositeOperation = "source-over";
       ctx.clearRect(0, 0, width, height);
       ctx.fillStyle = "#ffffff";
       ctx.fillRect(0, 0, width, height);
       ctx.drawImage(paint, 0, 0);
+      // Line art is drawn with "multiply" so a white/opaque line-art background
+      // keeps the paint visible underneath while the dark outlines stay dark.
+      ctx.globalCompositeOperation = "multiply";
       ctx.drawImage(line, 0, 0, width, height);
+      ctx.globalCompositeOperation = "source-over";
       if (overlayRef.current) ctx.drawImage(overlayRef.current, 0, 0);
     }, [width, height]);
 
