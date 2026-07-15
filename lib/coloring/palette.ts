@@ -47,3 +47,25 @@ export const PALETTE_GROUPS: PaletteGroup[] = [
 ];
 
 export const FLAT_PALETTE: string[] = PALETTE_GROUPS.flatMap((g) => g.colors);
+
+/** Curated one-row swatches for compact play-mode picker. */
+export const QUICK_PICKS: string[] = [
+  "#f43f5e",
+  "#fb7185",
+  "#f97316",
+  "#f59e0b",
+  "#facc15",
+  "#84cc16",
+  "#22c55e",
+  "#14b8a6",
+  "#38bdf8",
+  "#3b82f6",
+  "#6366f1",
+  "#a855f7",
+  "#ec4899",
+  "#92400e",
+  "#0f172a",
+  "#94a3b8",
+  "#e2e8f0",
+  "#ffffff",
+];
