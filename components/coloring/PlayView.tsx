@@ -93,20 +93,24 @@ export function PlayView({
       </div>
 
       {!isDone && (
-        <Panel className="sticky top-3 z-10 space-y-4 bg-[var(--duos-surface)]/95 backdrop-blur-md">
-          <Toolbar
-            tool={tool}
-            onToolChange={setTool}
-            brushSize={brushSize}
-            onBrushSizeChange={setBrushSize}
-            onUndo={() => canvasRef.current?.undo()}
-            onRedo={() => canvasRef.current?.redo()}
-            onClear={() => canvasRef.current?.clear()}
-            canUndo={history.canUndo}
-            canRedo={history.canRedo}
-          />
-          <ColorPicker color={color} onChange={setColor} />
-        </Panel>
+        <div className="sticky top-2 z-10 space-y-2">
+          <Panel className="bg-[var(--duos-surface)]/95 p-3 backdrop-blur-md sm:p-4">
+            <Toolbar
+              tool={tool}
+              onToolChange={setTool}
+              brushSize={brushSize}
+              onBrushSizeChange={setBrushSize}
+              onUndo={() => canvasRef.current?.undo()}
+              onRedo={() => canvasRef.current?.redo()}
+              onClear={() => canvasRef.current?.clear()}
+              canUndo={history.canUndo}
+              canRedo={history.canRedo}
+            />
+          </Panel>
+          <Panel className="bg-[var(--duos-surface)]/95 p-3 backdrop-blur-md sm:p-4">
+            <ColorPicker color={color} onChange={setColor} layout="compact" />
+          </Panel>
+        </div>
       )}
 
       <ColoringCanvas

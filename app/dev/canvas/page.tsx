@@ -69,7 +69,7 @@ export default function DevCanvasPage() {
           canUndo={history.canUndo}
           canRedo={history.canRedo}
         />
-        <ColorPicker color={color} onChange={setColor} />
+        <ColorPicker color={color} onChange={setColor} layout="full" />
       </div>
 
       <ColoringCanvas

@@ -21,7 +21,7 @@ export default function HomePage() {
       </header>
 
       <section
-        className="mt-12 grid gap-5 sm:mt-16 sm:grid-cols-2 lg:grid-cols-3"
+        className="mt-12 flex flex-wrap justify-center gap-5 sm:mt-16"
         aria-label="Available games"
       >
         {GAMES.map((game) => (

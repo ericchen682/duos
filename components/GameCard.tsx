@@ -49,7 +49,10 @@ export function GameCard({ game }: { game: GameMeta }) {
 
   if (!isActive) {
     return (
-      <div aria-disabled className="h-full cursor-not-allowed select-none">
+      <div
+        aria-disabled
+        className="h-full w-full max-w-sm cursor-not-allowed select-none sm:w-[calc(50%-0.625rem)] lg:w-[calc(33.333%-0.834rem)]"
+      >
         {inner}
       </div>
     );
@@ -58,7 +61,7 @@ export function GameCard({ game }: { game: GameMeta }) {
   return (
     <Link
       href={game.href}
-      className="h-full rounded-[var(--radius-card)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--duos-accent)] focus-visible:ring-offset-2"
+      className="block h-full w-full max-w-sm rounded-[var(--radius-card)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--duos-accent)] focus-visible:ring-offset-2 sm:w-[calc(50%-0.625rem)] lg:w-[calc(33.333%-0.834rem)]"
     >
       {inner}
     </Link>
