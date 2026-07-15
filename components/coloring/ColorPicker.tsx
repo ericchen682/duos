@@ -251,9 +251,9 @@ export function ColorPicker({ color, onChange }: ColorPickerProps) {
               {group.label}
             </p>
             <div className="flex flex-wrap gap-2">
-              {group.colors.map((c) => (
+              {group.colors.map((c, i) => (
                 <SwatchButton
-                  key={c}
+                  key={`${group.id}-${c}-${i}`}
                   c={c}
                   selected={c.toLowerCase() === color.toLowerCase()}
                   onPick={applyColor}
