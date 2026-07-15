@@ -3,6 +3,25 @@
 :root {
   --background: #fff7f9;
   --foreground: #2b2140;
+
+  /* Duos design tokens */
+  --duos-ink: #1a1228;
+  --duos-ink-muted: #6b6280;
+  --duos-accent: #e07a5f;
+  --duos-accent-strong: #c45c4a;
+  --duos-accent-soft: #fce8e3;
+  --duos-surface: #fffcfb;
+  --duos-surface-raised: #f5f0ee;
+  --duos-border: #e8e0dc;
+  --duos-player-a: #c45c4a;
+  --duos-player-b: #5b7a6a;
+  --duos-success: #3d9970;
+  --duos-danger: #c0392b;
+
+  --radius-card: 1.25rem;
+  --radius-panel: 1rem;
+  --shadow-card: 0 4px 24px -4px rgba(26, 18, 40, 0.08);
+  --shadow-soft: 0 8px 32px -8px rgba(196, 92, 74, 0.35);
 }
 
 @theme inline {
@@ -13,14 +32,13 @@
 }
 
 html {
-  /* Avoid the browser doing its own thing with touches on the whole page. */
   -webkit-text-size-adjust: 100%;
 }
 
 body {
   background:
-    radial-gradient(1200px 600px at 15% -10%, #ffe1ec 0%, transparent 55%),
-    radial-gradient(1000px 700px at 110% 10%, #e6e0ff 0%, transparent 50%),
+    radial-gradient(1200px 600px at 15% -10%, #fce8e3 0%, transparent 55%),
+    radial-gradient(1000px 700px at 110% 10%, #e8e4f0 0%, transparent 50%),
     var(--background);
   color: var(--foreground);
   font-family: var(--font-body), system-ui, sans-serif;
@@ -31,8 +49,6 @@ body {
   font-family: var(--font-display), var(--font-body), sans-serif;
 }
 
-/* Canvas / drawing helpers: stop the page from scrolling or selecting while a
-   player is painting with a finger or stylus. */
 .no-touch-scroll {
   touch-action: none;
   -webkit-user-select: none;
@@ -64,4 +80,17 @@ body {
   50% {
     transform: translateY(-6px);
   }
+}
+
+@keyframes upload-progress {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(250%);
+  }
+}
+
+.upload-progress-bar {
+  animation: upload-progress 1.2s ease-in-out infinite;
 }

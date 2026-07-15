@@ -9,6 +9,9 @@ const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
  */
 export const HALVES_BUCKET = "colored-halves";
 
+/** Creator-uploaded line-art pages (PNG/JPG). */
+export const PAGES_UPLOAD_BUCKET = "coloring-pages-uploads";
+
 /**
  * True when the Supabase environment variables are present. UI can use this to
  * fail gracefully with a helpful setup message instead of crashing.

@@ -4,10 +4,10 @@
 // Visit /dev/canvas. Safe to delete; not linked from the app.
 
 import { useRef, useState } from "react";
-import { ColorPalette } from "@/components/ColorPalette";
-import { ColoringCanvas, type ColoringCanvasHandle } from "@/components/ColoringCanvas";
-import { Toolbar, type Tool } from "@/components/Toolbar";
-import { presetSplit } from "@/lib/splits";
+import { ColorPicker } from "@/components/coloring/ColorPicker";
+import { ColoringCanvas, type ColoringCanvasHandle } from "@/components/coloring/ColoringCanvas";
+import { Toolbar, type Tool } from "@/components/coloring/Toolbar";
+import { presetSplit } from "@/lib/coloring/splits";
 import type { PlayerRole, SplitPreset } from "@/lib/types";
 
 const PAGE = { src: "/coloring-pages/house.png", width: 1000, height: 750 };
@@ -15,7 +15,7 @@ const PAGE = { src: "/coloring-pages/house.png", width: 1000, height: 750 };
 export default function DevCanvasPage() {
   const ref = useRef<ColoringCanvasHandle>(null);
   const [tool, setTool] = useState<Tool>("fill");
-  const [color, setColor] = useState("#f43f5e");
+  const [color, setColor] = useState("#c45c4a");
   const [brushSize, setBrushSize] = useState(14);
   const [role, setRole] = useState<PlayerRole>("A");
   const [preset, setPreset] = useState<SplitPreset>("vertical");
@@ -24,29 +24,31 @@ export default function DevCanvasPage() {
 
   return (
     <main className="mx-auto w-full max-w-3xl px-4 py-6">
-      <h1 className="mb-2 font-display text-2xl font-bold">Canvas dev harness</h1>
-      <p className="mb-4 text-sm text-slate-500" data-testid="ready-state">
+      <h1 className="mb-2 font-display text-2xl font-bold text-[var(--duos-ink)]">
+        Canvas dev harness
+      </h1>
+      <p className="mb-4 text-sm text-[var(--duos-ink-muted)]" data-testid="ready-state">
         ready: {String(ready)}
       </p>
 
       <div className="mb-3 flex flex-wrap gap-2 text-sm">
-        <label>
+        <label className="flex min-h-11 items-center gap-2">
           role:{" "}
           <select
             value={role}
             onChange={(e) => setRole(e.target.value as PlayerRole)}
-            className="rounded border px-2 py-1"
+            className="min-h-11 rounded-xl border border-[var(--duos-border)] px-3"
           >
             <option value="A">A</option>
             <option value="B">B</option>
           </select>
         </label>
-        <label>
+        <label className="flex min-h-11 items-center gap-2">
           split:{" "}
           <select
             value={preset}
             onChange={(e) => setPreset(e.target.value as SplitPreset)}
-            className="rounded border px-2 py-1"
+            className="min-h-11 rounded-xl border border-[var(--duos-border)] px-3"
           >
             <option value="vertical">vertical</option>
             <option value="horizontal">horizontal</option>
@@ -67,7 +69,7 @@ export default function DevCanvasPage() {
           canUndo={history.canUndo}
           canRedo={history.canRedo}
         />
-        <ColorPalette color={color} onChange={setColor} />
+        <ColorPicker color={color} onChange={setColor} />
       </div>
 
       <ColoringCanvas

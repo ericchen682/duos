@@ -94,3 +94,24 @@ create policy "anon write colored-halves" on storage.objects
 drop policy if exists "anon update colored-halves" on storage.objects;
 create policy "anon update colored-halves" on storage.objects
   for update using (bucket_id = 'colored-halves') with check (bucket_id = 'colored-halves');
+
+-- ---------------------------------------------------------------------------
+-- Storage: creator-uploaded line-art pages (PNG/JPG).
+-- Public read so both players load the same image via page_image URL.
+-- ---------------------------------------------------------------------------
+insert into storage.buckets (id, name, public)
+values ('coloring-pages-uploads', 'coloring-pages-uploads', true)
+on conflict (id) do nothing;
+
+drop policy if exists "public read coloring-pages-uploads" on storage.objects;
+create policy "public read coloring-pages-uploads" on storage.objects
+  for select using (bucket_id = 'coloring-pages-uploads');
+
+drop policy if exists "anon write coloring-pages-uploads" on storage.objects;
+create policy "anon write coloring-pages-uploads" on storage.objects
+  for insert with check (bucket_id = 'coloring-pages-uploads');
+
+drop policy if exists "anon update coloring-pages-uploads" on storage.objects;
+create policy "anon update coloring-pages-uploads" on storage.objects
+  for update using (bucket_id = 'coloring-pages-uploads')
+  with check (bucket_id = 'coloring-pages-uploads');

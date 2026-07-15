@@ -61,13 +61,13 @@ You need your own Supabase project (this repo cannot create one for you).
 1. **Create a project** at <https://supabase.com> (free tier is fine).
 2. **Create the schema.** In the dashboard open **SQL Editor → New query**, paste
    the contents of [`supabase/schema.sql`](supabase/schema.sql), and run it. This
-   creates the `lobbies` and `players` tables, enables Realtime on them, creates
-   the `colored-halves` Storage bucket, and adds the (anon-friendly) RLS
-   policies.
-   - The script creates the Storage bucket for you. If your project blocks
-     creating buckets from SQL, create a **public** bucket named
-     `colored-halves` manually under **Storage**, then re-run the script (the
-     `on conflict do nothing` makes it safe).
+   creates the `lobbies` and `players` tables, enables Realtime on them, and
+   creates the `colored-halves` and `coloring-pages-uploads` Storage buckets,
+   adds the (anon-friendly) RLS policies.
+   - The script creates both Storage buckets for you. If your project blocks
+     creating buckets from SQL, create **public** buckets named `colored-halves`
+     and `coloring-pages-uploads` manually under **Storage**, then re-run the
+     script (the `on conflict do nothing` makes it safe).
 3. **Grab your keys.** Go to **Project Settings → API** and copy the
    **Project URL** and the **anon public** key.
 4. **Configure the app.** Copy the example env file and fill it in:
@@ -98,7 +98,13 @@ in `supabase/schema.sql`.
 
 ## Adding your own coloring pages
 
-Line-art pages live in `public/coloring-pages/` and are listed in
+**In the app (recommended):** During lobby setup, the creator can tap **Upload yours**
+to upload a PNG or JPG (max 5 MB). The image is stored in the
+`coloring-pages-uploads` bucket and referenced on the lobby's `page_image` field so
+both players load the same file.
+
+**Via manifest (bundled pages):** Line-art pages also live in `public/coloring-pages/`
+and are listed in
 [`public/coloring-pages/manifest.json`](public/coloring-pages/manifest.json).
 
 1. Drop a **PNG or JPG** into `public/coloring-pages/`. Best results come from
@@ -144,14 +150,16 @@ have real art.
 
 | Path | What it does |
 | --- | --- |
-| `app/page.tsx` | Home — responsive grid of games (Split Coloring active, others "coming soon"). |
+| `app/page.tsx` | Home — responsive grid of games. |
 | `app/games/split-coloring/page.tsx` | Create a room or join by code. |
-| `app/lobby/[code]/page.tsx` | One stateful screen: `setup → waiting → playing → revealed`. |
-| `components/SplitEditor.tsx` | Creator picks a page and the split (presets or freehand curve), with a live preview. |
-| `components/ColoringCanvas.tsx` | The canvas engine (fill / brush / eraser / undo / mask clipping). |
-| `components/RevealView.tsx` | Composites both halves + line art and offers a download. |
-| `lib/lobby.ts` | Create/join/subscribe/update via Supabase + Storage. |
-| `lib/floodFill.ts`, `lib/mask.ts`, `lib/splits.ts` | Coloring + split geometry. |
+| `app/lobby/[code]/page.tsx` | Lobby state machine: `setup → waiting → playing → revealed`. |
+| `app/dev/canvas/page.tsx` | Dev harness for testing the canvas + color picker without Supabase. |
+| `components/lobby/` | Split editor (incl. upload), share panel, reveal view. |
+| `components/coloring/` | Canvas engine, toolbar, full color picker, play view. |
+| `components/ui/` | Shared buttons, cards, panels, page headers. |
+| `lib/lobby/` | Supabase lobby API, realtime hook, page upload. |
+| `lib/coloring/` | Flood fill, masks, splits, palette, color utils, page resolution. |
+| `lib/games/registry.ts` | Game catalog for the home page (extensible for future games). |
 
 Player identity is a random `client_id` in `localStorage`, so a refresh
 reconnects you to the same role in the same room.

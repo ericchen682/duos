@@ -1,9 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { SupabaseNotice } from "@/components/SupabaseNotice";
+import { Button } from "@/components/ui/Button";
+import { Panel } from "@/components/ui/Card";
+import { BackLink, PageHeader } from "@/components/ui/PageHeader";
 import { getClientId } from "@/lib/clientId";
 import { loadColoringPages } from "@/lib/coloringPages";
 import { createLobby, joinLobby } from "@/lib/lobby";
@@ -47,77 +49,61 @@ export default function SplitColoringEntryPage() {
 
   return (
     <main className="mx-auto flex min-h-dvh w-full max-w-lg flex-col justify-center px-5 py-10 sm:px-8">
-      <Link
-        href="/"
-        className="mb-8 inline-flex items-center gap-1 text-sm font-semibold text-slate-500 transition hover:text-rose-500"
-      >
-        ← All games
-      </Link>
+      <BackLink href="/">All games</BackLink>
 
-      <div className="animate-pop-in">
+      <div className="animate-pop-in mt-8">
         <div className="mb-6 flex items-center gap-3">
-          <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-rose-400 to-pink-500 text-3xl shadow-lg shadow-rose-200">
+          <span
+            className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-[var(--duos-accent)] to-[var(--duos-accent-strong)] text-3xl shadow-[var(--shadow-soft)]"
+            aria-hidden
+          >
             🎨
           </span>
-          <div>
-            <h1 className="font-display text-3xl font-extrabold text-slate-800">
-              Split Coloring
-            </h1>
-            <p className="text-sm text-slate-500">Color your half, reveal it together.</p>
-          </div>
+          <PageHeader
+            title="Split Coloring"
+            description="Color your half, reveal it together."
+          />
         </div>
 
         {!configured ? (
           <SupabaseNotice />
         ) : (
           <div className="space-y-4">
-            <button
-              onClick={handleCreate}
-              disabled={busy !== null}
-              className="w-full rounded-2xl bg-gradient-to-br from-rose-400 to-pink-500 px-6 py-4 text-lg font-bold text-white shadow-lg shadow-rose-200 transition active:scale-[0.98] disabled:opacity-60"
-            >
+            <Button size="lg" fullWidth onClick={handleCreate} disabled={busy !== null}>
               {busy === "create" ? "Creating room…" : "Create a room"}
-            </button>
+            </Button>
 
-            <div className="flex items-center gap-3 py-1 text-xs font-semibold uppercase tracking-wide text-slate-400">
-              <span className="h-px flex-1 bg-slate-200" />
+            <div className="flex items-center gap-3 py-1 text-xs font-semibold uppercase tracking-wide text-[var(--duos-ink-muted)]">
+              <span className="h-px flex-1 bg-[var(--duos-border)]" />
               or join
-              <span className="h-px flex-1 bg-slate-200" />
+              <span className="h-px flex-1 bg-[var(--duos-border)]" />
             </div>
 
-            <form
-              onSubmit={handleJoin}
-              className="rounded-2xl border border-white/70 bg-white/80 p-4 shadow-sm backdrop-blur"
-            >
-              <label
-                htmlFor="code"
-                className="mb-2 block text-sm font-semibold text-slate-600"
-              >
-                Enter a room code
-              </label>
-              <div className="flex gap-2">
-                <input
-                  id="code"
-                  value={joinCode}
-                  onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
-                  placeholder="ABCDE"
-                  autoComplete="off"
-                  autoCapitalize="characters"
-                  maxLength={5}
-                  className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-white px-4 py-3 text-center text-xl font-bold uppercase tracking-[0.3em] text-slate-800 outline-none focus:border-rose-400 focus:ring-4 focus:ring-rose-100"
-                />
-                <button
-                  type="submit"
-                  disabled={busy !== null || joinCode.trim().length === 0}
-                  className="rounded-xl bg-slate-800 px-5 py-3 font-bold text-white transition active:scale-95 disabled:opacity-40"
-                >
-                  {busy === "join" ? "…" : "Join"}
-                </button>
-              </div>
-            </form>
+            <Panel>
+              <form onSubmit={handleJoin} className="space-y-3">
+                <label htmlFor="code" className="block text-sm font-semibold text-[var(--duos-ink-muted)]">
+                  Enter a room code
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    id="code"
+                    value={joinCode}
+                    onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
+                    placeholder="ABCDE"
+                    autoComplete="off"
+                    autoCapitalize="characters"
+                    maxLength={5}
+                    className="min-h-11 min-w-0 flex-1 rounded-xl border border-[var(--duos-border)] bg-white px-4 py-3 text-center text-xl font-bold uppercase tracking-[0.3em] text-[var(--duos-ink)] outline-none focus:border-[var(--duos-accent)] focus:ring-2 focus:ring-[var(--duos-accent-soft)]"
+                  />
+                  <Button type="submit" disabled={busy !== null || joinCode.trim().length === 0}>
+                    {busy === "join" ? "…" : "Join"}
+                  </Button>
+                </div>
+              </form>
+            </Panel>
 
             {error && (
-              <p className="rounded-xl bg-rose-50 px-4 py-3 text-sm font-medium text-rose-600">
+              <p className="rounded-xl bg-rose-50 px-4 py-3 text-sm font-medium text-[var(--duos-danger)]">
                 {error}
               </p>
             )}
