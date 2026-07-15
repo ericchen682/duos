@@ -77,7 +77,9 @@ export function SplitEditor({
     ctx.fillRect(0, 0, PREVIEW_W, previewH);
     ctx.drawImage(img, 0, 0, PREVIEW_W, previewH);
 
-    const split = currentSplit();
+    // While actively drawing a freehand line, skip the (expensive) mask tint and
+    // just trace the raw path for smooth feedback. The tint is rendered on release.
+    const split = drawingRef.current ? null : currentSplit();
     if (split) {
       const maskA = deriveMask(PREVIEW_W, previewH, split, "A");
       const maskB = deriveMask(PREVIEW_W, previewH, split, "B");
@@ -150,7 +152,10 @@ export function SplitEditor({
     setCustomPath((prev) => [...prev, toNorm(e)]);
   };
   const onUp = () => {
+    if (!drawingRef.current) return;
     drawingRef.current = false;
+    // Re-render now that drawing finished so the tinted split preview appears.
+    render();
   };
 
   const split = currentSplit();
