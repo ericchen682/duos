@@ -1,15 +1,16 @@
 import Link from "next/link";
+import { Card } from "@/components/ui/Card";
 import type { GameMeta } from "@/lib/games";
 
 export function GameCard({ game }: { game: GameMeta }) {
   const isActive = game.status === "active";
 
   const inner = (
-    <div
-      className={`group relative flex h-full flex-col overflow-hidden rounded-3xl border p-6 transition-all duration-300 sm:p-7 ${
+    <Card
+      className={`group flex h-full flex-col p-6 transition duration-300 sm:p-7 ${
         isActive
-          ? "border-white/70 bg-white/80 shadow-lg shadow-rose-200/50 backdrop-blur hover:-translate-y-1 hover:shadow-xl"
-          : "border-white/40 bg-white/40 opacity-70"
+          ? "hover:-translate-y-1 hover:shadow-[var(--shadow-soft)]"
+          : "opacity-65"
       }`}
     >
       <div
@@ -21,29 +22,29 @@ export function GameCard({ game }: { game: GameMeta }) {
 
       <div className="flex flex-1 flex-col">
         <div className="flex items-center gap-2">
-          <h3 className="font-display text-2xl font-bold text-slate-800">
+          <h3 className="font-display text-2xl font-bold text-[var(--duos-ink)]">
             {game.title}
           </h3>
           {!isActive && (
-            <span className="rounded-full bg-slate-200 px-2.5 py-0.5 text-xs font-bold uppercase tracking-wide text-slate-500">
+            <span className="rounded-full bg-[var(--duos-surface-raised)] px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[var(--duos-ink-muted)]">
               Soon
             </span>
           )}
         </div>
-        <p className="mt-2 text-pretty text-sm leading-relaxed text-slate-500">
+        <p className="mt-2 text-pretty text-sm leading-relaxed text-[var(--duos-ink-muted)]">
           {game.tagline}
         </p>
       </div>
 
       {isActive && (
-        <div className="mt-6 flex items-center gap-2 font-semibold text-rose-500">
+        <p className="mt-6 flex items-center gap-2 font-semibold text-[var(--duos-accent-strong)]">
           Play now
-          <span className="transition-transform duration-300 group-hover:translate-x-1">
+          <span className="transition-transform duration-200 group-hover:translate-x-1" aria-hidden>
             →
           </span>
-        </div>
+        </p>
       )}
-    </div>
+    </Card>
   );
 
   if (!isActive) {
@@ -55,7 +56,10 @@ export function GameCard({ game }: { game: GameMeta }) {
   }
 
   return (
-    <Link href={game.href} className="h-full focus:outline-none focus-visible:ring-4 focus-visible:ring-rose-300 rounded-3xl">
+    <Link
+      href={game.href}
+      className="h-full rounded-[var(--radius-card)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--duos-accent)] focus-visible:ring-offset-2"
+    >
       {inner}
     </Link>
   );

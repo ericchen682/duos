@@ -1,16 +1,17 @@
 import type { Metadata, Viewport } from "next";
-import { Baloo_2, Nunito } from "next/font/google";
+import { DM_Sans, Fraunces } from "next/font/google";
 import "./globals.css";
 
-const display = Baloo_2({
+const display = Fraunces({
   variable: "--font-display",
   subsets: ["latin"],
-  weight: ["500", "600", "700", "800"],
+  weight: ["600", "700"],
 });
 
-const body = Nunito({
+const body = DM_Sans({
   variable: "--font-body",
   subsets: ["latin"],
+  weight: ["400", "500", "600", "700"],
 });
 
 export const metadata: Metadata = {
@@ -19,13 +20,12 @@ export const metadata: Metadata = {
     "Cozy games to play together. Start with Split Coloring: color your half in secret, then reveal the drawing you made as a pair.",
 };
 
-// Drawing app: lock zoom so pinch/double-tap don't fight with the canvas.
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   maximumScale: 1,
   userScalable: false,
-  themeColor: "#fb7185",
+  themeColor: "#c45c4a",
 };
 
 export default function RootLayout({
@@ -38,7 +38,7 @@ export default function RootLayout({
       lang="en"
       className={`${display.variable} ${body.variable} h-full antialiased`}
     >
-      <body className="min-h-full">{children}</body>
+      <body className="min-h-full text-[var(--duos-ink)]">{children}</body>
     </html>
   );
 }
