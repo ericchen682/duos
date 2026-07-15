@@ -1,0 +1,25 @@
+{
+  "pages": [
+    {
+      "id": "house",
+      "title": "Cozy House",
+      "src": "/coloring-pages/house.png",
+      "width": 1000,
+      "height": 750
+    },
+    {
+      "id": "flower",
+      "title": "Flower",
+      "src": "/coloring-pages/flower.png",
+      "width": 1000,
+      "height": 750
+    },
+    {
+      "id": "fish",
+      "title": "Happy Fish",
+      "src": "/coloring-pages/fish.png",
+      "width": 1000,
+      "height": 750
+    }
+  ]
+}
