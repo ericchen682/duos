@@ -1,36 +1,157 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Duos 💞
 
-## Getting Started
+Cozy little games for two people. No accounts, no fuss — one person starts a
+room, the other joins with a short code or a shareable link.
 
-First, run the development server:
+The first (and currently only) game is **Split Coloring**: a line-art page is
+split into two regions, each player colors their own half **in secret**, and when
+both are done the two halves combine into one finished drawing that you can
+download together.
+
+> Mobile/iPad-first. Works great with touch and stylus, and also with a mouse.
+
+---
+
+## Tech stack
+
+- **Next.js** (App Router) + **TypeScript**
+- **Tailwind CSS v4**
+- **Supabase** — Postgres (lobby/player state), Realtime (live sync), Storage
+  (colored halves)
+- Deploy target: **Vercel**
+
+The coloring engine is a plain HTML5 Canvas raster engine:
+
+- **Tap-to-fill** — scanline flood fill with color tolerance, bounded by the dark
+  line-art pixels (`lib/floodFill.ts`).
+- **Freeform brush** (4 sizes) + **eraser**, a color palette, and **undo/redo**
+  (canvas snapshots).
+- All painting is **clipped to the current player's region mask**
+  (`lib/mask.ts`), so you can only color your own half.
+
+---
+
+## Run it locally
+
+Prerequisites: Node 20+ (developed on Node 24) and npm.
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Then open http://localhost:3000. Without Supabase env vars the home page loads,
+but creating/joining a room shows a friendly "connect Supabase" message. Follow
+the setup below to enable multiplayer.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Other scripts:
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+npm run build   # production build + typecheck
+npm run lint    # eslint
+node scripts/generate-pages.mjs   # regenerate the placeholder line-art PNGs
+```
 
-## Learn More
+---
 
-To learn more about Next.js, take a look at the following resources:
+## Supabase setup (required for multiplayer)
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+You need your own Supabase project (this repo cannot create one for you).
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+1. **Create a project** at <https://supabase.com> (free tier is fine).
+2. **Create the schema.** In the dashboard open **SQL Editor → New query**, paste
+   the contents of [`supabase/schema.sql`](supabase/schema.sql), and run it. This
+   creates the `lobbies` and `players` tables, enables Realtime on them, creates
+   the `colored-halves` Storage bucket, and adds the (anon-friendly) RLS
+   policies.
+   - The script creates the Storage bucket for you. If your project blocks
+     creating buckets from SQL, create a **public** bucket named
+     `colored-halves` manually under **Storage**, then re-run the script (the
+     `on conflict do nothing` makes it safe).
+3. **Grab your keys.** Go to **Project Settings → API** and copy the
+   **Project URL** and the **anon public** key.
+4. **Configure the app.** Copy the example env file and fill it in:
 
-## Deploy on Vercel
+   ```bash
+   cp .env.local.example .env.local
+   ```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+   ```dotenv
+   NEXT_PUBLIC_SUPABASE_URL=https://your-project-ref.supabase.co
+   NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-public-key
+   ```
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+5. **Restart** `npm run dev`. Create a room on one device and join it from another
+   (or a second browser) to test the full flow.
+
+### A note on security (MVP)
+
+There is **no login**. Players are identified only by a random `client_id` stored
+in `localStorage`, and the RLS policies allow anonymous read/write to lobbies,
+players, and the halves bucket. This is fine for casual, unlisted, short-lived
+games where the lobby code is effectively the only secret. Before anything
+serious you should tighten the policies (scope updates to the caller, add a
+cleanup job for old lobbies, consider Supabase anonymous auth). See the comments
+in `supabase/schema.sql`.
+
+---
+
+## Adding your own coloring pages
+
+Line-art pages live in `public/coloring-pages/` and are listed in
+[`public/coloring-pages/manifest.json`](public/coloring-pages/manifest.json).
+
+1. Drop a **PNG or JPG** into `public/coloring-pages/`. Best results come from
+   **black line art on a white (or transparent) background** — the flood fill
+   treats dark pixels as walls.
+2. Add an entry to `manifest.json`:
+
+   ```json
+   {
+     "pages": [
+       {
+         "id": "my-page",
+         "title": "My Page",
+         "src": "/coloring-pages/my-page.png",
+         "width": 1000,
+         "height": 750
+       }
+     ]
+   }
+   ```
+
+   `width`/`height` should match the image's intrinsic pixel size (used as the
+   canvas resolution).
+
+The three bundled pages (`house`, `flower`, `fish`) are generated by
+`scripts/generate-pages.mjs` — a small pure-JS generator you can delete once you
+have real art.
+
+---
+
+## Deploy to Vercel
+
+1. Push this repo to GitHub and **import it in Vercel**.
+2. In the Vercel project, add the two environment variables (Project Settings →
+   Environment Variables), for all environments:
+   - `NEXT_PUBLIC_SUPABASE_URL`
+   - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+3. Deploy. That's it — the app is a standard Next.js App Router build.
+
+---
+
+## How it works (a quick tour)
+
+| Path | What it does |
+| --- | --- |
+| `app/page.tsx` | Home — responsive grid of games (Split Coloring active, others "coming soon"). |
+| `app/games/split-coloring/page.tsx` | Create a room or join by code. |
+| `app/lobby/[code]/page.tsx` | One stateful screen: `setup → waiting → playing → revealed`. |
+| `components/SplitEditor.tsx` | Creator picks a page and the split (presets or freehand curve), with a live preview. |
+| `components/ColoringCanvas.tsx` | The canvas engine (fill / brush / eraser / undo / mask clipping). |
+| `components/RevealView.tsx` | Composites both halves + line art and offers a download. |
+| `lib/lobby.ts` | Create/join/subscribe/update via Supabase + Storage. |
+| `lib/floodFill.ts`, `lib/mask.ts`, `lib/splits.ts` | Coloring + split geometry. |
+
+Player identity is a random `client_id` in `localStorage`, so a refresh
+reconnects you to the same role in the same room.
