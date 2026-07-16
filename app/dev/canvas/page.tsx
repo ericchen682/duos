@@ -6,7 +6,8 @@
 import { useRef, useState } from "react";
 import { ColorPicker } from "@/components/coloring/ColorPicker";
 import { ColoringCanvas, type ColoringCanvasHandle } from "@/components/coloring/ColoringCanvas";
-import { Toolbar, type Tool } from "@/components/coloring/Toolbar";
+import { Toolbar } from "@/components/coloring/Toolbar";
+import { useDrawingTools } from "@/components/coloring/useDrawingTools";
 import { presetSplit } from "@/lib/coloring/splits";
 import type { PlayerRole, SplitPreset } from "@/lib/types";
 
@@ -14,9 +15,8 @@ const PAGE = { src: "/coloring-pages/house.png", width: 1000, height: 750 };
 
 export default function DevCanvasPage() {
   const ref = useRef<ColoringCanvasHandle>(null);
-  const [tool, setTool] = useState<Tool>("brush");
+  const { tool, setTool, brushSize, setBrushSize } = useDrawingTools();
   const [color, setColor] = useState("#c45c4a");
-  const [brushSize, setBrushSize] = useState(14);
   const [role, setRole] = useState<PlayerRole>("A");
   const [preset, setPreset] = useState<SplitPreset>("vertical");
   const [history, setHistory] = useState({ canUndo: false, canRedo: false });

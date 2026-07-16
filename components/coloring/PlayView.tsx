@@ -3,7 +3,8 @@
 import { useRef, useState } from "react";
 import { ColorPicker } from "@/components/coloring/ColorPicker";
 import { ColoringCanvas, type ColoringCanvasHandle } from "@/components/coloring/ColoringCanvas";
-import { Toolbar, type Tool } from "@/components/coloring/Toolbar";
+import { Toolbar } from "@/components/coloring/Toolbar";
+import { useDrawingTools } from "@/components/coloring/useDrawingTools";
 import { Badge } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Panel } from "@/components/ui/Card";
@@ -35,9 +36,8 @@ export function PlayView({
   onKeepColoring,
 }: PlayViewProps) {
   const canvasRef = useRef<ColoringCanvasHandle>(null);
-  const [tool, setTool] = useState<Tool>("brush");
+  const { tool, setTool, brushSize, setBrushSize } = useDrawingTools();
   const [color, setColor] = useState("#c45c4a");
-  const [brushSize, setBrushSize] = useState(14);
   const [history, setHistory] = useState({ canUndo: false, canRedo: false });
   const [ready, setReady] = useState(false);
   const [submitting, setSubmitting] = useState(false);
