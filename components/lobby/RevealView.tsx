@@ -100,7 +100,7 @@ export function RevealView({ lobbyId, pageSrc, width, height }: RevealViewProps)
           Download the drawing
         </Button>
         <Link
-          href="/games/split-coloring"
+          href="/"
           className="inline-flex min-h-12 items-center justify-center rounded-2xl border border-[var(--duos-border)] bg-[var(--duos-surface)] px-6 py-3 text-base font-semibold text-[var(--duos-ink)] shadow-sm transition hover:bg-[var(--duos-surface-raised)]"
         >
           Play again
