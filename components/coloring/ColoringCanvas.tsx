@@ -16,8 +16,9 @@ import {
   overlayOutsideMask,
 } from "@/lib/coloring/imageUtils";
 import { deriveMask } from "@/lib/coloring/mask";
+import { paintStroke } from "@/lib/coloring/strokes";
 import type { PlayerRole, SplitData } from "@/lib/types";
-import type { Tool } from "./Toolbar";
+import type { Tool } from "@/lib/coloring/strokes";
 
 const MAX_HISTORY = 14;
 
@@ -211,28 +212,11 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
       const ctx = paintCtxRef.current;
       if (!ctx) return;
       const size = sizeRef.current;
-      ctx.lineCap = "round";
-      ctx.lineJoin = "round";
-      ctx.lineWidth = size;
-      if (toolRef.current === "eraser") {
-        ctx.globalCompositeOperation = "destination-out";
-        ctx.strokeStyle = "rgba(0,0,0,1)";
-        ctx.fillStyle = "rgba(0,0,0,1)";
-      } else {
-        ctx.globalCompositeOperation = "source-over";
-        ctx.strokeStyle = colorRef.current;
-        ctx.fillStyle = colorRef.current;
-      }
-      ctx.beginPath();
-      ctx.moveTo(from.x, from.y);
-      ctx.lineTo(to.x, to.y);
-      ctx.stroke();
-      // Ensure a lone tap leaves a dot.
-      ctx.beginPath();
-      ctx.arc(to.x, to.y, size / 2, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.globalCompositeOperation = "source-over";
-      if (toolRef.current !== "eraser") clipToMask();
+      const currentTool = toolRef.current;
+      if (currentTool === "fill") return;
+
+      paintStroke(ctx, from, to, currentTool, size, colorRef.current);
+      if (currentTool !== "eraser") clipToMask();
     };
 
     const doFill = (pt: { x: number; y: number }) => {
