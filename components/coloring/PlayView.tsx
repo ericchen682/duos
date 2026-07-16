@@ -35,7 +35,7 @@ export function PlayView({
   onKeepColoring,
 }: PlayViewProps) {
   const canvasRef = useRef<ColoringCanvasHandle>(null);
-  const [tool, setTool] = useState<Tool>("fill");
+  const [tool, setTool] = useState<Tool>("brush");
   const [color, setColor] = useState("#c45c4a");
   const [brushSize, setBrushSize] = useState(14);
   const [history, setHistory] = useState({ canUndo: false, canRedo: false });

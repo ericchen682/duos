@@ -14,7 +14,7 @@ const PAGE = { src: "/coloring-pages/house.png", width: 1000, height: 750 };
 
 export default function DevCanvasPage() {
   const ref = useRef<ColoringCanvasHandle>(null);
-  const [tool, setTool] = useState<Tool>("fill");
+  const [tool, setTool] = useState<Tool>("brush");
   const [color, setColor] = useState("#c45c4a");
   const [brushSize, setBrushSize] = useState(14);
   const [role, setRole] = useState<PlayerRole>("A");

@@ -57,8 +57,8 @@ function EraserIcon() {
 }
 
 const toolMeta: { id: Tool; label: string; Icon: () => React.ReactElement }[] = [
-  { id: "fill", label: "Fill", Icon: FillIcon },
   { id: "brush", label: "Brush", Icon: BrushIcon },
+  { id: "fill", label: "Fill", Icon: FillIcon },
   { id: "eraser", label: "Eraser", Icon: EraserIcon },
 ];
 
