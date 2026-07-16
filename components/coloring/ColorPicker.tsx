@@ -9,13 +9,27 @@ import {
   normalizeHex,
   rgbToHex,
 } from "@/lib/coloring/colorUtils";
-import { PALETTE_GROUPS, QUICK_PICKS } from "@/lib/coloring/palette";
+import { QUICK_PICKS } from "@/lib/coloring/palette";
+import {
+  addToPersonalPalette,
+  filledPersonalColors,
+  getEffectivePaletteGroups,
+  loadPersonalPalette,
+  loadPaletteOverrides,
+  setPaletteOverride,
+  setPersonalSlot,
+  type PaletteOverrideKey,
+} from "@/lib/coloring/paletteStorage";
 import { loadRecentColors, pushRecentColor } from "@/lib/coloring/recentColors";
+import { SwatchEditor, type SwatchEditTarget } from "@/components/coloring/SwatchEditor";
+import { Button } from "@/components/ui/Button";
+
+type PickerTab = "quick" | "palette" | "custom";
 
 interface ColorPickerProps {
   color: string;
   onChange: (hex: string) => void;
-  /** compact = play view (quick row + collapsible full palette); full = dev/setup */
+  /** compact = play view (collapsed quick row + expandable sheet); full = dev/setup */
   layout?: "compact" | "full";
 }
 
@@ -23,19 +37,66 @@ function SwatchButton({
   c,
   selected,
   onPick,
+  onLongPress,
   size = "md",
+  empty = false,
+  label,
 }: {
-  c: string;
+  c: string | null;
   selected: boolean;
   onPick: (c: string) => void;
+  onLongPress?: () => void;
   size?: "sm" | "md";
+  empty?: boolean;
+  label?: string;
 }) {
   const dim = size === "sm" ? "h-9 w-9" : "h-10 w-10";
+  const longPressTriggered = useRef(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearTimer = () => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+  };
+
+  if (empty || !c) {
+    return (
+      <button
+        type="button"
+        onClick={() => onLongPress?.()}
+        aria-label={label ?? "Empty color slot"}
+        className={`${dim} shrink-0 rounded-full border-2 border-dashed border-[var(--duos-border)] bg-white text-sm text-[var(--duos-ink-muted)] transition hover:border-[var(--duos-accent)]`}
+      >
+        +
+      </button>
+    );
+  }
+
   return (
     <button
       type="button"
-      onClick={() => onPick(c)}
-      aria-label={`Color ${c}`}
+      onClick={() => {
+        if (longPressTriggered.current) {
+          longPressTriggered.current = false;
+          return;
+        }
+        onPick(c);
+      }}
+      onPointerDown={() => {
+        longPressTriggered.current = false;
+        if (onLongPress) {
+          timerRef.current = setTimeout(() => {
+            longPressTriggered.current = true;
+            onLongPress();
+          }, 450);
+        }
+      }}
+      onPointerUp={clearTimer}
+      onPointerCancel={clearTimer}
+      onPointerLeave={clearTimer}
+      aria-label={label ?? `Color ${c}`}
       aria-pressed={selected}
       className={`${dim} shrink-0 rounded-full border-2 shadow-sm transition active:scale-95 ${
         selected
@@ -62,6 +123,7 @@ function CustomPickerPanel({
   onHueUp,
   setHexInput,
   applyColor,
+  onSavePersonal,
 }: {
   color: string;
   hsv: { h: number; s: number; v: number };
@@ -77,12 +139,13 @@ function CustomPickerPanel({
   onHueUp: () => void;
   setHexInput: (v: string) => void;
   applyColor: (hex: string) => void;
+  onSavePersonal: (hex: string) => void;
 }) {
   const hueBg = `hsl(${hsv.h} 100% 50%)`;
   const svBg = `linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, ${hueBg})`;
 
   return (
-    <div className="animate-pop-in space-y-3 rounded-[var(--radius-panel)] border border-[var(--duos-border)] bg-[var(--duos-surface)] p-3 shadow-sm">
+    <div className="space-y-3">
       <div
         ref={svRef}
         role="application"
@@ -165,6 +228,49 @@ function CustomPickerPanel({
           ))}
         </div>
       </div>
+
+      <Button size="sm" variant="secondary" onClick={() => onSavePersonal(color)}>
+        Save to My Colors
+      </Button>
+    </div>
+  );
+}
+
+function TabBar({
+  tab,
+  onTabChange,
+}: {
+  tab: PickerTab;
+  onTabChange: (t: PickerTab) => void;
+}) {
+  const tabs: { id: PickerTab; label: string }[] = [
+    { id: "quick", label: "Quick" },
+    { id: "palette", label: "Palette" },
+    { id: "custom", label: "Custom" },
+  ];
+
+  return (
+    <div
+      className="flex gap-1 rounded-xl border border-[var(--duos-border)] bg-[var(--duos-surface-raised)] p-1"
+      role="tablist"
+      aria-label="Color picker sections"
+    >
+      {tabs.map((t) => (
+        <button
+          key={t.id}
+          type="button"
+          role="tab"
+          aria-selected={tab === t.id}
+          onClick={() => onTabChange(t.id)}
+          className={`min-h-9 flex-1 rounded-lg px-2 text-xs font-bold transition ${
+            tab === t.id
+              ? "bg-[var(--duos-surface)] text-[var(--duos-ink)] shadow-sm"
+              : "text-[var(--duos-ink-muted)] hover:text-[var(--duos-ink)]"
+          }`}
+        >
+          {t.label}
+        </button>
+      ))}
     </div>
   );
 }
@@ -176,13 +282,23 @@ export function ColorPicker({ color, onChange, layout = "full" }: ColorPickerPro
   const [hexInput, setHexInput] = useState(color);
   const [rgb, setRgb] = useState(() => hexToRgb(color));
   const [recents, setRecents] = useState<string[]>(() => loadRecentColors());
-  const [expandedCustom, setExpandedCustom] = useState(!isCompact);
-  const [expandedPalette, setExpandedPalette] = useState(!isCompact);
+  const [personalSlots, setPersonalSlots] = useState<(string | null)[]>(() => loadPersonalPalette());
+  const [overrides, setOverrides] = useState<Record<PaletteOverrideKey, string>>(() =>
+    loadPaletteOverrides()
+  );
+  const [sheetOpen, setSheetOpen] = useState(!isCompact);
+  const [tab, setTab] = useState<PickerTab>("quick");
+  const [editTarget, setEditTarget] = useState<SwatchEditTarget | null>(null);
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [editorColor, setEditorColor] = useState(color);
 
   const svRef = useRef<HTMLDivElement>(null);
   const hueRef = useRef<HTMLDivElement>(null);
   const draggingSv = useRef(false);
   const draggingHue = useRef(false);
+
+  const paletteGroups = getEffectivePaletteGroups(overrides);
+  const personalColors = filledPersonalColors(personalSlots);
 
   const applyColor = useCallback(
     (hex: string, trackRecent = true) => {
@@ -195,6 +311,26 @@ export function ColorPicker({ color, onChange, layout = "full" }: ColorPickerPro
     },
     [onChange]
   );
+
+  const handleSavePersonal = useCallback((hex: string) => {
+    setPersonalSlots(addToPersonalPalette(hex));
+  }, []);
+
+  const handleReplacePreset = useCallback(
+    (hex: string) => {
+      if (!editTarget || editTarget.kind !== "preset") return;
+      setOverrides(setPaletteOverride(editTarget.groupId, editTarget.index, hex));
+      applyColor(hex);
+      setEditTarget(null);
+    },
+    [applyColor, editTarget]
+  );
+
+  const openEditor = useCallback((initial: string, target?: SwatchEditTarget) => {
+    setEditorColor(initial);
+    setEditTarget(target ?? null);
+    setEditorOpen(true);
+  }, []);
 
   const updateFromHsv = useCallback(
     (next: { h: number; s: number; v: number }) => {
@@ -250,151 +386,227 @@ export function ColorPicker({ color, onChange, layout = "full" }: ColorPickerPro
     draggingHue.current = false;
   };
 
-  const quickSwatches = isCompact ? QUICK_PICKS : [];
-  const showRecents = recents.length > 0;
+  const collapsedSwatches = [
+    ...personalColors,
+    ...QUICK_PICKS.filter(
+      (c) => !personalColors.some((p) => p.toLowerCase() === c.toLowerCase())
+    ),
+  ];
 
-  return (
-    <div className="space-y-2" data-testid="color-picker">
-      {/* Quick row — always visible */}
-      <div className="flex items-center gap-2">
-        <div
-          className="flex min-w-0 flex-1 gap-1.5 overflow-x-auto pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-          role="list"
-          aria-label="Color swatches"
-        >
-          {(isCompact ? quickSwatches : []).map((c) => (
+  const quickTab = (
+    <div className="space-y-3">
+      <div>
+        <p className="mb-1.5 text-[10px] font-bold uppercase tracking-wide text-[var(--duos-ink-muted)]">
+          My colors
+        </p>
+        <div className="flex flex-wrap gap-1.5">
+          {personalSlots.map((slot, i) => (
+            <SwatchButton
+              key={`personal-${i}`}
+              c={slot}
+              empty={slot === null}
+              selected={slot !== null && slot.toLowerCase() === color.toLowerCase()}
+              onPick={applyColor}
+              onLongPress={() =>
+                openEditor(slot ?? color, {
+                  kind: "preset",
+                  groupId: "personal",
+                  index: i,
+                  label: "My color",
+                })
+              }
+              size="sm"
+              label={slot ? `My color ${i + 1}` : `Add my color slot ${i + 1}`}
+            />
+          ))}
+        </div>
+      </div>
+
+      <div>
+        <p className="mb-1.5 text-[10px] font-bold uppercase tracking-wide text-[var(--duos-ink-muted)]">
+          Quick picks
+        </p>
+        <div className="flex flex-wrap gap-1.5">
+          {QUICK_PICKS.map((c) => (
             <SwatchButton
               key={c}
               c={c}
               selected={c.toLowerCase() === color.toLowerCase()}
               onPick={applyColor}
+              onLongPress={() => openEditor(c)}
               size="sm"
             />
           ))}
+        </div>
+      </div>
 
-          {!isCompact && showRecents &&
-            recents.map((c) => (
+      {recents.length > 0 && (
+        <div>
+          <p className="mb-1.5 text-[10px] font-bold uppercase tracking-wide text-[var(--duos-ink-muted)]">
+            Recent
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            {recents.map((c) => (
               <SwatchButton
                 key={`recent-${c}`}
                 c={c}
                 selected={c.toLowerCase() === color.toLowerCase()}
                 onPick={applyColor}
+                onLongPress={() => openEditor(c)}
                 size="sm"
               />
             ))}
-
-          {/* Native color input — fast on iPad */}
-          <label
-            className="relative flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-full border-2 border-dashed border-[var(--duos-border)] bg-white text-lg font-light text-[var(--duos-ink-muted)] shadow-sm transition hover:border-[var(--duos-accent)]"
-            title="Pick any color"
-          >
-            <span aria-hidden>+</span>
-            <input
-              type="color"
-              value={color}
-              onChange={(e) => applyColor(e.target.value)}
-              className="absolute inset-0 cursor-pointer opacity-0"
-              aria-label="Pick a custom color"
-            />
-          </label>
-        </div>
-
-        {isCompact && (
-          <div className="flex shrink-0 gap-1">
-            <button
-              type="button"
-              onClick={() => setExpandedCustom((v) => !v)}
-              aria-expanded={expandedCustom}
-              className="flex h-9 items-center rounded-xl border border-[var(--duos-border)] bg-[var(--duos-surface)] px-2.5 text-xs font-bold text-[var(--duos-ink-muted)] transition hover:border-[var(--duos-accent)]"
-            >
-              {expandedCustom ? "Less" : "Custom"}
-            </button>
-            <button
-              type="button"
-              onClick={() => setExpandedPalette((v) => !v)}
-              aria-expanded={expandedPalette}
-              className="flex h-9 items-center rounded-xl border border-[var(--duos-border)] bg-[var(--duos-surface)] px-2.5 text-xs font-bold text-[var(--duos-ink-muted)] transition hover:border-[var(--duos-accent)]"
-            >
-              {expandedPalette ? "Less" : "More"}
-            </button>
           </div>
-        )}
-      </div>
+        </div>
+      )}
+    </div>
+  );
 
-      {isCompact && showRecents && (
-        <div className="flex gap-1.5 overflow-x-auto pb-0.5">
-          <span className="shrink-0 self-center text-[10px] font-bold uppercase tracking-wide text-[var(--duos-ink-muted)]">
-            Recent
-          </span>
-          {recents.map((c) => (
+  const paletteTab = (
+    <div className="space-y-3">
+      <p className="text-xs text-[var(--duos-ink-muted)]">Long-press a swatch to tweak or replace it.</p>
+      {paletteGroups.map((group) => (
+        <div key={group.id}>
+          <p className="mb-1.5 text-[10px] font-bold uppercase tracking-wide text-[var(--duos-ink-muted)]">
+            {group.label}
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            {group.colors.map((c, i) => (
+              <SwatchButton
+                key={`${group.id}-${i}`}
+                c={c}
+                selected={c.toLowerCase() === color.toLowerCase()}
+                onPick={applyColor}
+                onLongPress={() =>
+                  openEditor(c, {
+                    kind: "preset",
+                    groupId: group.id,
+                    index: i,
+                    label: group.label,
+                  })
+                }
+                size="sm"
+              />
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+
+  const customPanel = (
+    <CustomPickerPanel
+      color={color}
+      hsv={hsv}
+      hexInput={hexInput}
+      rgb={rgb}
+      svRef={svRef}
+      hueRef={hueRef}
+      onSvDown={onSvDown}
+      onSvMove={onSvMove}
+      onSvUp={onSvUp}
+      onHueDown={onHueDown}
+      onHueMove={onHueMove}
+      onHueUp={onHueUp}
+      setHexInput={setHexInput}
+      applyColor={applyColor}
+      onSavePersonal={handleSavePersonal}
+    />
+  );
+
+  return (
+    <div className="space-y-2" data-testid="color-picker">
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => {
+            setSheetOpen(true);
+            setTab("custom");
+          }}
+          aria-label="Current color"
+          className="h-10 w-10 shrink-0 rounded-full border-2 border-[var(--duos-ink)] shadow-sm ring-2 ring-[var(--duos-ink)] ring-offset-1"
+          style={{ backgroundColor: color }}
+        />
+
+        <div
+          className="flex min-w-0 flex-1 gap-1.5 overflow-x-auto pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+          role="list"
+          aria-label="Color swatches"
+        >
+          {collapsedSwatches.map((c) => (
             <SwatchButton
-              key={`recent-${c}`}
+              key={`collapsed-${c}`}
               c={c}
               selected={c.toLowerCase() === color.toLowerCase()}
               onPick={applyColor}
+              onLongPress={() => openEditor(c)}
               size="sm"
             />
           ))}
         </div>
-      )}
 
-      {/* Full mode: toggle for custom picker */}
-      {!isCompact && (
-        <button
-          type="button"
-          onClick={() => setExpandedCustom((v) => !v)}
-          aria-expanded={expandedCustom}
-          className="flex min-h-10 items-center gap-2 rounded-xl border border-[var(--duos-border)] bg-[var(--duos-surface)] px-3 py-1.5 text-sm font-semibold text-[var(--duos-ink)] shadow-sm transition hover:border-[var(--duos-accent)]"
-        >
-          <span
-            className="h-7 w-7 rounded-lg border border-black/10 shadow-inner"
-            style={{ backgroundColor: color }}
-            aria-hidden
-          />
-          {expandedCustom ? "Hide custom picker" : "Custom color"}
-        </button>
-      )}
+        {isCompact && (
+          <button
+            type="button"
+            onClick={() => setSheetOpen((v) => !v)}
+            aria-expanded={sheetOpen}
+            className="flex h-10 shrink-0 items-center rounded-xl border border-[var(--duos-border)] bg-[var(--duos-surface)] px-3 text-xs font-bold text-[var(--duos-ink-muted)] transition hover:border-[var(--duos-accent)]"
+          >
+            {sheetOpen ? "Less" : "Colors"}
+          </button>
+        )}
+      </div>
 
-      {expandedCustom && (
-        <CustomPickerPanel
-          color={color}
-          hsv={hsv}
-          hexInput={hexInput}
-          rgb={rgb}
-          svRef={svRef}
-          hueRef={hueRef}
-          onSvDown={onSvDown}
-          onSvMove={onSvMove}
-          onSvUp={onSvUp}
-          onHueDown={onHueDown}
-          onHueMove={onHueMove}
-          onHueUp={onHueUp}
-          setHexInput={setHexInput}
-          applyColor={applyColor}
-        />
-      )}
-
-      {(expandedPalette || !isCompact) && (
-        <div className="space-y-2">
-          {PALETTE_GROUPS.map((group) => (
-            <div key={group.id}>
-              <p className="mb-1.5 text-[10px] font-bold uppercase tracking-wide text-[var(--duos-ink-muted)]">
-                {group.label}
-              </p>
-              <div className="flex flex-wrap gap-1.5">
-                {group.colors.map((c, i) => (
-                  <SwatchButton
-                    key={`${group.id}-${c}-${i}`}
-                    c={c}
-                    selected={c.toLowerCase() === color.toLowerCase()}
-                    onPick={applyColor}
-                    size="sm"
-                  />
-                ))}
-              </div>
-            </div>
-          ))}
+      {sheetOpen && (
+        <div className="animate-pop-in space-y-3 rounded-[var(--radius-panel)] border border-[var(--duos-border)] bg-[var(--duos-surface)] p-3 shadow-sm">
+          <TabBar tab={tab} onTabChange={setTab} />
+          {tab === "quick" && quickTab}
+          {tab === "palette" && paletteTab}
+          {tab === "custom" && customPanel}
         </div>
+      )}
+
+      {editorOpen && (
+        <SwatchEditor
+          initialColor={editorColor}
+          target={
+            editTarget && editTarget.groupId !== "personal" ? editTarget : undefined
+          }
+          personalSlotIndex={
+            editTarget?.groupId === "personal" ? editTarget.index : undefined
+          }
+          onApply={(hex) => {
+            applyColor(hex);
+            setEditorOpen(false);
+            setEditTarget(null);
+          }}
+          onSavePersonal={(hex) => {
+            if (editTarget?.groupId === "personal") {
+              setPersonalSlots(setPersonalSlot(editTarget.index, hex));
+            } else {
+              handleSavePersonal(hex);
+            }
+            applyColor(hex);
+            setEditorOpen(false);
+            setEditTarget(null);
+          }}
+          onUpdateSlot={(hex) => {
+            if (editTarget?.groupId === "personal") {
+              setPersonalSlots(setPersonalSlot(editTarget.index, hex));
+              applyColor(hex);
+            }
+            setEditorOpen(false);
+            setEditTarget(null);
+          }}
+          onReplacePreset={(hex) => {
+            handleReplacePreset(hex);
+            setEditorOpen(false);
+          }}
+          onClose={() => {
+            setEditorOpen(false);
+            setEditTarget(null);
+          }}
+        />
       )}
     </div>
   );
