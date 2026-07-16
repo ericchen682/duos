@@ -165,7 +165,7 @@ export default function LobbyPage() {
           description={error ?? "This room doesn't exist."}
         />
         <Link
-          href="/games/split-coloring"
+          href="/"
           className="mt-6 inline-flex min-h-11 items-center rounded-2xl bg-[var(--duos-accent)] px-5 py-2.5 font-semibold text-white"
         >
           Start a new room
@@ -183,7 +183,7 @@ export default function LobbyPage() {
           description="Two players are already coloring here."
         />
         <Link
-          href="/games/split-coloring"
+          href="/"
           className="mt-6 inline-flex min-h-11 items-center rounded-2xl bg-[var(--duos-accent)] px-5 py-2.5 font-semibold text-white"
         >
           Start your own room
