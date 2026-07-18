@@ -93,6 +93,69 @@ function crayonDab(
   ctx.globalAlpha = 1;
 }
 
+/**
+ * Opacity at which a whole highlighter stroke is composited over the paint
+ * layer. Individual strokes are uniform at this alpha no matter how much they
+ * self-overlap; separate strokes still stack translucently.
+ */
+export const HIGHLIGHTER_ALPHA = 0.35;
+
+/** Fixed chisel angle (45°): unit offset from a point to the tip's edge. */
+const CHISEL_UX = Math.SQRT1_2;
+const CHISEL_UY = -Math.SQRT1_2;
+
+/**
+ * Paint one OPAQUE chisel-tip highlighter segment. Callers are expected to
+ * accumulate these into an offscreen stroke buffer and composite the whole
+ * buffer at HIGHLIGHTER_ALPHA (once per frame for preview, once on commit) so
+ * self-overlap within a stroke never darkens.
+ *
+ * The tip is a flat bar at a constant 45° angle; a segment is the parallelogram
+ * swept between the two tip positions. Because the angle is fixed, consecutive
+ * segments share an exact edge at their joint — no caps, no seams, and cheap
+ * enough to run per pointermove.
+ */
+export function paintHighlighterSegment(
+  ctx: CanvasRenderingContext2D,
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+  size: number,
+  color: string
+) {
+  const half = (size * 1.35) / 2;
+  const ox = CHISEL_UX * half;
+  const oy = CHISEL_UY * half;
+
+  ctx.save();
+  ctx.globalCompositeOperation = "source-over";
+  ctx.fillStyle = color;
+  ctx.strokeStyle = color;
+
+  // Flat tip footprint at both ends (also what a stationary tap leaves, and it
+  // keeps strokes visible when dragging parallel to the chisel edge).
+  ctx.lineCap = "butt";
+  ctx.lineWidth = Math.max(2, size * 0.18);
+  ctx.beginPath();
+  ctx.moveTo(from.x - ox, from.y - oy);
+  ctx.lineTo(from.x + ox, from.y + oy);
+  ctx.moveTo(to.x - ox, to.y - oy);
+  ctx.lineTo(to.x + ox, to.y + oy);
+  ctx.stroke();
+
+  // Parallelogram swept by the tip between the two points.
+  if (from.x !== to.x || from.y !== to.y) {
+    ctx.beginPath();
+    ctx.moveTo(from.x - ox, from.y - oy);
+    ctx.lineTo(to.x - ox, to.y - oy);
+    ctx.lineTo(to.x + ox, to.y + oy);
+    ctx.lineTo(from.x + ox, from.y + oy);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  ctx.restore();
+}
+
 function dotAt(
   ctx: CanvasRenderingContext2D,
   x: number,
@@ -191,16 +254,12 @@ export function paintStroke(
       break;
     }
     case "highlighter": {
-      // source-over + low alpha: multiply stacks too aggressively on self-overlap while dragging.
-      ctx.globalCompositeOperation = "source-over";
-      ctx.strokeStyle = rgba(color, 0.2);
-      ctx.lineCap = "round";
-      ctx.lineJoin = "round";
-      ctx.lineWidth = size * 1.35;
-      ctx.beginPath();
-      ctx.moveTo(from.x, from.y);
-      ctx.lineTo(to.x, to.y);
-      ctx.stroke();
+      // Legacy direct path (per-segment alpha). ColoringCanvas instead routes
+      // highlighter segments through paintHighlighterSegment into an offscreen
+      // stroke buffer so alpha stays uniform within a stroke.
+      ctx.globalAlpha = HIGHLIGHTER_ALPHA;
+      paintHighlighterSegment(ctx, from, to, size, color);
+      ctx.globalAlpha = 1;
       break;
     }
     case "airbrush": {
