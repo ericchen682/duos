@@ -222,6 +222,10 @@ function CustomPickerPanel({
             }}
             className="mt-1 w-full min-h-10 rounded-xl border border-[var(--duos-border)] bg-white px-3 font-mono text-sm uppercase tracking-wider text-[var(--duos-ink)] outline-none focus:border-[var(--duos-accent)] focus:ring-2 focus:ring-[var(--duos-accent-soft)]"
             spellCheck={false}
+            autoCapitalize="none"
+            autoCorrect="off"
+            autoComplete="off"
+            enterKeyHint="done"
             data-testid="hex-input"
           />
         </label>
@@ -231,6 +235,8 @@ function CustomPickerPanel({
               {ch.toUpperCase()}
               <input
                 type="number"
+                inputMode="numeric"
+                enterKeyHint="done"
                 min={0}
                 max={255}
                 value={rgb[ch]}
