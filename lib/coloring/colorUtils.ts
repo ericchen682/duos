@@ -99,6 +99,33 @@ export function normalizeHex(hex: string): string {
   return "#" + clean.toLowerCase();
 }
 
+/** Linear RGB-space mix of two hex colors; amount 0 = hex, 1 = other. */
+export function mixHex(hex: string, other: string, amount: number): string {
+  const a = hexToRgb(hex);
+  const b = hexToRgb(other);
+  const t = clamp(amount, 0, 1);
+  return rgbToHex({
+    r: a.r + (b.r - a.r) * t,
+    g: a.g + (b.g - a.g) * t,
+    b: a.b + (b.b - a.b) * t,
+  });
+}
+
+/**
+ * Symmetric shades/tints ramp around a base color: `steps` darker shades
+ * (darkest first), then the base, then `steps` lighter tints (lightest last).
+ * Mixed in RGB toward black/white so the hue stays put — handy for shading
+ * while coloring.
+ */
+export function shadeRamp(hex: string, steps = 3): string[] {
+  const base = normalizeHex(hex);
+  const out: string[] = [];
+  for (let k = steps; k >= 1; k--) out.push(mixHex(base, "#000000", 0.18 * k));
+  out.push(base);
+  for (let k = 1; k <= steps; k++) out.push(mixHex(base, "#ffffff", 0.22 * k));
+  return out;
+}
+
 export function contrastText(hex: string): string {
   const { r, g, b } = hexToRgb(hex);
   const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
