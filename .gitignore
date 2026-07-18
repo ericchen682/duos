@@ -27,6 +27,7 @@ AGENTS.md
 agents.md
 CLAUDE.md
 claude.md
+.claude/
 
 # debug
 npm-debug.log*
