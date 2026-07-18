@@ -280,8 +280,7 @@ function SizeSlider({
 
 /**
  * Vertical-rail size control: a single button showing the current size that
- * opens a popover (presets + slider) beside the rail. Keeps the rail narrow
- * while leaving the slider finger-sized on iPad.
+ * opens a popover (presets + slider) to the right over the canvas.
  */
 function SizePopover({
   brushSize,
@@ -291,7 +290,12 @@ function SizePopover({
   onBrushSizeChange: (s: number) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [mounted, setMounted] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   useEffect(() => {
     if (!open) return;
@@ -300,12 +304,23 @@ function SizePopover({
         setOpen(false);
       }
     };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
     window.addEventListener("pointerdown", onPointerDown);
-    return () => window.removeEventListener("pointerdown", onPointerDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("keydown", onKey);
+    };
   }, [open]);
 
+  if (!mounted) {
+    return <div className="h-11 w-11 shrink-0" aria-hidden />;
+  }
+
   return (
-    <div ref={rootRef} className="relative">
+    <div ref={rootRef} className="relative z-30">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
@@ -313,7 +328,7 @@ function SizePopover({
         aria-haspopup="dialog"
         aria-label={`Tool size, ${brushSize}`}
         title={`Tool size, ${brushSize}`}
-        className={`flex h-11 w-11 items-center justify-center rounded-2xl border border-[var(--duos-border)] shadow-sm transition ${
+        className={`flex h-11 w-11 touch-manipulation select-none items-center justify-center rounded-2xl border border-[var(--duos-border)] shadow-sm transition ${
           open
             ? "bg-[var(--duos-ink)]"
             : "bg-[var(--duos-surface)] hover:bg-[var(--duos-surface-raised)]"
@@ -332,12 +347,35 @@ function SizePopover({
         <div
           role="group"
           aria-label="Tool size"
-          className="absolute bottom-0 left-full z-20 ml-3 w-64 rounded-2xl border border-[var(--duos-border)] bg-[var(--duos-surface)] p-2 shadow-[var(--shadow-card)]"
+          className="absolute bottom-0 left-full z-30 ml-3 flex w-56 flex-col gap-2 rounded-2xl border border-[var(--duos-border)] bg-[var(--duos-surface)] p-2 shadow-[var(--shadow-card)] animate-pop-in motion-reduce:animate-none"
         >
-          <div className="flex items-center justify-between gap-1">
-            <SizePresetButtons brushSize={brushSize} onBrushSizeChange={onBrushSizeChange} />
+          <div className="flex flex-col gap-1">
+            {BRUSH_SIZES.map((s) => (
+              <button
+                key={s}
+                type="button"
+                onClick={() => onBrushSizeChange(s)}
+                aria-pressed={brushSize === s}
+                aria-label={`Tool size ${s}`}
+                className={`flex min-h-11 w-full touch-manipulation select-none items-center gap-3 rounded-xl px-3 transition ${
+                  brushSize === s
+                    ? "bg-[var(--duos-ink)] text-white"
+                    : "bg-[var(--duos-surface-raised)] text-[var(--duos-ink)] hover:bg-[var(--duos-border)]"
+                }`}
+              >
+                <span
+                  className="rounded-full"
+                  style={{
+                    width: Math.max(6, s / 3),
+                    height: Math.max(6, s / 3),
+                    backgroundColor: brushSize === s ? "#fff" : "var(--duos-ink-muted)",
+                  }}
+                />
+                <span className="text-xs font-bold tabular-nums">{s}</span>
+              </button>
+            ))}
           </div>
-          <div className="mt-1 flex">
+          <div className="flex rounded-xl border border-[var(--duos-border)] bg-[var(--duos-surface-raised)] px-2">
             <SizeSlider brushSize={brushSize} onBrushSizeChange={onBrushSizeChange} />
           </div>
         </div>

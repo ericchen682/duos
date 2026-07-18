@@ -148,8 +148,8 @@ export function PlayView({
         /* Main area: tool rail left, canvas center, color picker right on md+;
            stacked bars above the canvas below md (today's phone behavior). */
         <div className="space-y-4 md:flex md:items-start md:gap-4 md:space-y-0">
-          <div className="sticky top-2 z-10 flex flex-col gap-2 md:contents">
-            <Panel className="bg-[var(--duos-surface)]/95 p-2 backdrop-blur-md md:order-1 md:sticky md:top-2 md:shrink-0 md:self-start">
+          <div className="sticky top-2 z-20 flex flex-col gap-2 overflow-visible md:contents">
+            <Panel className="overflow-visible bg-[var(--duos-surface)]/95 p-2 backdrop-blur-md md:order-1 md:sticky md:top-2 md:z-20 md:shrink-0 md:self-start">
               <div className="md:hidden">
                 <Toolbar
                   tool={tool}
@@ -168,7 +168,7 @@ export function PlayView({
                 />
               </div>
             </Panel>
-            <Panel className="bg-[var(--duos-surface)]/95 p-3 backdrop-blur-md md:order-3 md:sticky md:top-2 md:w-72 md:shrink-0 md:self-start lg:w-80">
+            <Panel className="overflow-visible bg-[var(--duos-surface)]/95 p-3 backdrop-blur-md md:order-3 md:sticky md:top-2 md:z-20 md:w-72 md:shrink-0 md:self-start lg:w-80">
               <ColorPicker color={color} onChange={setColor} layout="compact" />
             </Panel>
           </div>
