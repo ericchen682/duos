@@ -92,7 +92,7 @@ export default function DevCanvasPage() {
           </div>
         </Panel>
 
-        <Panel className="p-3 md:order-3 md:w-72 md:shrink-0 md:self-start lg:w-80">
+        <Panel className="overflow-visible p-3 md:order-3 md:shrink-0 md:self-start">
           <ColorPicker color={color} onChange={setColor} layout="compact" />
         </Panel>
 

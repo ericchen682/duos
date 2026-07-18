@@ -470,9 +470,11 @@ export function ColorPicker({ color, onChange, layout = "full" }: ColorPickerPro
 
   useLayoutEffect(() => {
     if (!editorOpen || !editorAnchor || !editorPanelRef.current) return;
-    const rect = editorPanelRef.current.getBoundingClientRect();
+    // offsetWidth/Height ignore the pop-in transform, so the clamp sees the
+    // panel's settled size rather than the mid-animation one.
+    const el = editorPanelRef.current;
     setEditorPos(
-      clampPopoverNearAnchor(editorAnchor, rect.width || 320, rect.height || 420)
+      clampPopoverNearAnchor(editorAnchor, el.offsetWidth || 320, el.offsetHeight || 420)
     );
   }, [editorOpen, editorAnchor, editorColor]);
 
@@ -484,6 +486,17 @@ export function ColorPicker({ color, onChange, layout = "full" }: ColorPickerPro
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [editorOpen, closeEditor]);
+
+  // Escape collapses the floating sheet, but only when the swatch editor isn't
+  // the thing being dismissed.
+  useEffect(() => {
+    if (!isCompact || !sheetOpen || editorOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setSheetOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [isCompact, sheetOpen, editorOpen]);
 
   // HSV stays the source of truth during custom-picker drags (HsvArea keeps a
   // gesture-local mirror); recents are committed once per gesture on
@@ -519,7 +532,7 @@ export function ColorPicker({ color, onChange, layout = "full" }: ColorPickerPro
     ...QUICK_PICKS,
   ]).slice(0, 6);
 
-  const swatchGridClass = "grid grid-cols-8 gap-0.5 sm:grid-cols-9 sm:gap-1";
+  const swatchGridClass = "grid grid-cols-8 gap-0.5 sm:grid-cols-9 sm:gap-1 md:grid-cols-10";
 
   const quickTab = (
     <div className="space-y-2">
@@ -645,8 +658,9 @@ export function ColorPicker({ color, onChange, layout = "full" }: ColorPickerPro
   return (
     <div data-testid="color-picker" className="relative">
       <div className="flex items-start gap-2">
-        {/* Vertical collapsed rail */}
-        <div className="flex w-12 shrink-0 flex-col items-center gap-0.5">
+        {/* Vertical collapsed rail; kept above the sheet backdrop so its
+            swatches stay tappable while the sheet is open. */}
+        <div className="relative z-40 flex w-12 shrink-0 flex-col items-center gap-0.5">
           <button
             type="button"
             onClick={() => {
@@ -692,16 +706,28 @@ export function ColorPicker({ color, onChange, layout = "full" }: ColorPickerPro
           )}
         </div>
 
-        {/* Sideways expand sheet */}
+        {/* Expand sheet: in-flow sideways reveal on small screens; on md+ (compact)
+            a floating panel anchored left of the rail, over the canvas, so the
+            fixed-width side panel never clips it. */}
         <div
-          className={`min-w-0 overflow-hidden transition-[max-width,opacity] duration-300 ease-[cubic-bezier(0.2,0.8,0.2,1)] motion-reduce:transition-none ${
+          className={`min-w-0 overflow-hidden transition-[max-width,opacity,transform] duration-300 ease-[cubic-bezier(0.2,0.8,0.2,1)] motion-reduce:transition-none ${
+            isCompact
+              ? "md:absolute md:right-full md:top-0 md:z-40 md:mr-2 md:w-max md:max-w-none md:flex-none md:origin-top-right md:overflow-visible"
+              : ""
+          } ${
             sheetOpen
               ? "max-w-[min(100%,36rem)] flex-1 opacity-100"
-              : "pointer-events-none max-w-0 opacity-0"
+              : `pointer-events-none max-w-0 opacity-0 ${isCompact ? "md:scale-95" : ""}`
           }`}
           inert={!sheetOpen}
         >
-          <div className="w-[min(100vw-5rem,36rem)] space-y-2 rounded-[var(--radius-panel)] border border-[var(--duos-border)] bg-[var(--duos-surface)] p-2.5 shadow-sm sm:p-3">
+          <div
+            className={`w-[min(100vw-9rem,36rem)] space-y-2 rounded-[var(--radius-panel)] border border-[var(--duos-border)] bg-[var(--duos-surface)] p-2.5 shadow-sm sm:p-3 ${
+              isCompact
+                ? "md:max-h-[calc(100dvh-7rem)] md:overflow-y-auto md:shadow-[var(--shadow-card)]"
+                : ""
+            }`}
+          >
             <ShadeStrip base={shadeBase} current={color} onPick={applyShade} />
             <TabBar tab={tab} onTabChange={handleTabChange} />
             {tab === "quick" && quickTab}
@@ -710,6 +736,16 @@ export function ColorPicker({ color, onChange, layout = "full" }: ColorPickerPro
           </div>
         </div>
       </div>
+
+      {/* Transparent backdrop for the floating sheet: a tap on the canvas closes
+          the sheet instead of drawing a stray stroke. */}
+      {isCompact && sheetOpen && (
+        <div
+          className="fixed inset-0 z-30 hidden md:block"
+          aria-hidden
+          onPointerDown={() => setSheetOpen(false)}
+        />
+      )}
 
       {editorOpen &&
         typeof document !== "undefined" &&
