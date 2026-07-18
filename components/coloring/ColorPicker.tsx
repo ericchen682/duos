@@ -296,6 +296,10 @@ export function ColorPicker({ color, onChange, layout = "full" }: ColorPickerPro
   const hueRef = useRef<HTMLDivElement>(null);
   const draggingSv = useRef(false);
   const draggingHue = useRef(false);
+  // Mirrors of hsv/color state so pointermove handlers never read a stale
+  // closure (moves can outpace renders on 120Hz touch screens).
+  const hsvRef = useRef(hexToHsv(color));
+  const colorRef = useRef(normalizeHex(color));
 
   const paletteGroups = getEffectivePaletteGroups(overrides);
   const personalColors = filledPersonalColors(personalSlots);
@@ -303,9 +307,11 @@ export function ColorPicker({ color, onChange, layout = "full" }: ColorPickerPro
   const applyColor = useCallback(
     (hex: string, trackRecent = true) => {
       const normalized = normalizeHex(hex);
+      colorRef.current = normalized;
+      hsvRef.current = hexToHsv(normalized);
       onChange(normalized);
       setHexInput(normalized);
-      setHsv(hexToHsv(normalized));
+      setHsv(hsvRef.current);
       setRgb(hexToRgb(normalized));
       if (trackRecent) setRecents(pushRecentColor(normalized));
     },
@@ -332,12 +338,27 @@ export function ColorPicker({ color, onChange, layout = "full" }: ColorPickerPro
     setEditorOpen(true);
   }, []);
 
+  // HSV is the source of truth while dragging the custom picker: converting
+  // back through 8-bit hex loses hue/saturation near black and white, which
+  // made the hue drift (or snap to red) mid-drag. Recents are committed once
+  // per gesture on pointer-up instead of on every move, so we don't hammer
+  // localStorage at touch-move frequency.
   const updateFromHsv = useCallback(
     (next: { h: number; s: number; v: number }) => {
-      applyColor(hsvToHex(next));
+      const normalized = normalizeHex(hsvToHex(next));
+      hsvRef.current = next;
+      colorRef.current = normalized;
+      setHsv(next);
+      onChange(normalized);
+      setHexInput(normalized);
+      setRgb(hexToRgb(normalized));
     },
-    [applyColor]
+    [onChange]
   );
+
+  const commitRecent = useCallback(() => {
+    setRecents(pushRecentColor(colorRef.current));
+  }, []);
 
   const pickSv = (clientX: number, clientY: number) => {
     const el = svRef.current;
@@ -345,7 +366,7 @@ export function ColorPicker({ color, onChange, layout = "full" }: ColorPickerPro
     const rect = el.getBoundingClientRect();
     const s = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
     const v = Math.max(0, Math.min(1, 1 - (clientY - rect.top) / rect.height));
-    updateFromHsv({ ...hsv, s, v });
+    updateFromHsv({ ...hsvRef.current, s, v });
   };
 
   const pickHue = (clientX: number) => {
@@ -353,12 +374,12 @@ export function ColorPicker({ color, onChange, layout = "full" }: ColorPickerPro
     if (!el) return;
     const rect = el.getBoundingClientRect();
     const h = Math.max(0, Math.min(360, ((clientX - rect.left) / rect.width) * 360));
-    updateFromHsv({ ...hsv, h });
+    updateFromHsv({ ...hsvRef.current, h });
   };
 
   const onSvDown = (e: React.PointerEvent) => {
     e.preventDefault();
-    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+    e.currentTarget.setPointerCapture?.(e.pointerId);
     draggingSv.current = true;
     pickSv(e.clientX, e.clientY);
   };
@@ -368,12 +389,14 @@ export function ColorPicker({ color, onChange, layout = "full" }: ColorPickerPro
     pickSv(e.clientX, e.clientY);
   };
   const onSvUp = () => {
+    if (!draggingSv.current) return;
     draggingSv.current = false;
+    commitRecent();
   };
 
   const onHueDown = (e: React.PointerEvent) => {
     e.preventDefault();
-    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+    e.currentTarget.setPointerCapture?.(e.pointerId);
     draggingHue.current = true;
     pickHue(e.clientX);
   };
@@ -383,7 +406,9 @@ export function ColorPicker({ color, onChange, layout = "full" }: ColorPickerPro
     pickHue(e.clientX);
   };
   const onHueUp = () => {
+    if (!draggingHue.current) return;
     draggingHue.current = false;
+    commitRecent();
   };
 
   const collapsedSwatches = [
