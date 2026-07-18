@@ -33,6 +33,18 @@ export function toolUsesSize(tool: Tool): boolean {
   return tool !== "fill";
 }
 
+/**
+ * Width multiplier for stylus pressure (Apple Pencil). Tools with a rigid tip
+ * (marker felt, highlighter chisel) stay fixed-width; soft tools swell from a
+ * light hairline to ~1.5x at full press. 0.5 pressure (also the mouse default)
+ * lands near 1x so pointer type doesn't change the baseline feel.
+ */
+export function pressureWidthScale(tool: Tool, pressure: number): number {
+  if (tool === "marker" || tool === "highlighter" || tool === "fill") return 1;
+  const p = Math.min(1, Math.max(0.05, pressure));
+  return 0.45 + p * 1.1;
+}
+
 function rgba(hex: string, alpha: number): string {
   const { r, g, b } = hexToRgb(hex);
   return `rgba(${r},${g},${b},${alpha})`;

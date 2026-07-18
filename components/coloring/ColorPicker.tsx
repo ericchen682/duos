@@ -440,6 +440,39 @@ export function ColorPicker({ color, onChange, layout = "full" }: ColorPickerPro
     [applyColor]
   );
 
+  // Collapsed-rail swatches are deliberately stable: they seed from saved
+  // colors once, then reorder only when a color is chosen inside the expanded
+  // sheet — never from rail taps, so the rail can't shuffle under your finger.
+  const [railColors, setRailColors] = useState<string[]>(() =>
+    dedupeHex([
+      ...loadRecentColors().slice(0, 5),
+      ...filledPersonalColors(loadPersonalPalette()),
+      ...QUICK_PICKS,
+    ]).slice(0, 6)
+  );
+
+  const promoteToRail = useCallback((hex: string) => {
+    const normalized = normalizeHex(hex);
+    setRailColors((prev) => dedupeHex([normalized, ...prev]).slice(0, 6));
+  }, []);
+
+  /** Pick from inside the expanded sheet: applies the color and surfaces it on the rail. */
+  const applyFromSheet = useCallback(
+    (hex: string) => {
+      applyColor(hex);
+      promoteToRail(hex);
+    },
+    [applyColor, promoteToRail]
+  );
+
+  const applyShadeFromSheet = useCallback(
+    (hex: string) => {
+      applyShade(hex);
+      promoteToRail(hex);
+    },
+    [applyShade, promoteToRail]
+  );
+
   const handleSavePersonal = useCallback((hex: string) => {
     setPersonalSlots(addToPersonalPalette(hex));
   }, []);
@@ -448,10 +481,10 @@ export function ColorPicker({ color, onChange, layout = "full" }: ColorPickerPro
     (hex: string) => {
       if (!editTarget || editTarget.kind !== "preset") return;
       setOverrides(setPaletteOverride(editTarget.groupId, editTarget.index, hex));
-      applyColor(hex);
+      applyFromSheet(hex);
       setEditTarget(null);
     },
-    [applyColor, editTarget]
+    [applyFromSheet, editTarget]
   );
 
   const closeEditor = useCallback(() => {
@@ -516,7 +549,8 @@ export function ColorPicker({ color, onChange, layout = "full" }: ColorPickerPro
   const commitRecent = useCallback(() => {
     setRecents(pushRecentColor(colorRef.current));
     setShadeBase(colorRef.current);
-  }, []);
+    promoteToRail(colorRef.current);
+  }, [promoteToRail]);
 
   const handleTabChange = useCallback(
     (t: PickerTab) => {
@@ -525,12 +559,6 @@ export function ColorPicker({ color, onChange, layout = "full" }: ColorPickerPro
     },
     [tab]
   );
-
-  const collapsedSwatches = dedupeHex([
-    ...recents.slice(0, 5),
-    ...personalColors,
-    ...QUICK_PICKS,
-  ]).slice(0, 6);
 
   const swatchGridClass = "grid grid-cols-8 gap-0.5 sm:grid-cols-9 sm:gap-1 md:grid-cols-10";
 
@@ -547,7 +575,7 @@ export function ColorPicker({ color, onChange, layout = "full" }: ColorPickerPro
               c={slot}
               empty={slot === null}
               selected={slot !== null && slot.toLowerCase() === color.toLowerCase()}
-              onPick={applyColor}
+              onPick={applyFromSheet}
               onEmptyPick={() => setPersonalSlots(setPersonalSlot(i, colorRef.current))}
               onLongPress={(el) =>
                 openEditor(slot ?? color, el, {
@@ -577,7 +605,7 @@ export function ColorPicker({ color, onChange, layout = "full" }: ColorPickerPro
               key={c}
               c={c}
               selected={c.toLowerCase() === color.toLowerCase()}
-              onPick={applyColor}
+              onPick={applyFromSheet}
               onLongPress={(el) => openEditor(c, el)}
               size="sm"
             />
@@ -596,7 +624,7 @@ export function ColorPicker({ color, onChange, layout = "full" }: ColorPickerPro
                 key={`recent-${c}`}
                 c={c}
                 selected={c.toLowerCase() === color.toLowerCase()}
-                onPick={applyColor}
+                onPick={applyFromSheet}
                 onLongPress={(el) => openEditor(c, el)}
                 size="sm"
               />
@@ -621,7 +649,7 @@ export function ColorPicker({ color, onChange, layout = "full" }: ColorPickerPro
                 key={`${group.id}-${i}`}
                 c={c}
                 selected={c.toLowerCase() === color.toLowerCase()}
-                onPick={applyColor}
+                onPick={applyFromSheet}
                 onLongPress={(el) =>
                   openEditor(c, el, {
                     kind: "preset",
@@ -650,7 +678,7 @@ export function ColorPicker({ color, onChange, layout = "full" }: ColorPickerPro
       onHsvCommit={commitRecent}
       onRevert={() => applyColor(customBaseline)}
       setHexInput={setHexInput}
-      applyColor={applyColor}
+      applyColor={applyFromSheet}
       onSavePersonal={handleSavePersonal}
     />
   );
@@ -682,7 +710,7 @@ export function ColorPicker({ color, onChange, layout = "full" }: ColorPickerPro
             role="list"
             aria-label="Color swatches"
           >
-            {collapsedSwatches.map((c) => (
+            {railColors.map((c) => (
               <SwatchButton
                 key={`collapsed-${c}`}
                 c={c}
@@ -728,7 +756,7 @@ export function ColorPicker({ color, onChange, layout = "full" }: ColorPickerPro
                 : ""
             }`}
           >
-            <ShadeStrip base={shadeBase} current={color} onPick={applyShade} />
+            <ShadeStrip base={shadeBase} current={color} onPick={applyShadeFromSheet} />
             <TabBar tab={tab} onTabChange={handleTabChange} />
             {tab === "quick" && quickTab}
             {tab === "palette" && paletteTab}
@@ -737,11 +765,11 @@ export function ColorPicker({ color, onChange, layout = "full" }: ColorPickerPro
         </div>
       </div>
 
-      {/* Transparent backdrop for the floating sheet: a tap on the canvas closes
-          the sheet instead of drawing a stray stroke. */}
+      {/* Transparent backdrop while the sheet is open: any tap outside it (on
+          every breakpoint) closes the sheet instead of reaching the canvas. */}
       {isCompact && sheetOpen && (
         <div
-          className="fixed inset-0 z-30 hidden md:block"
+          className="fixed inset-0 z-30"
           aria-hidden
           onPointerDown={() => setSheetOpen(false)}
         />
@@ -774,7 +802,7 @@ export function ColorPicker({ color, onChange, layout = "full" }: ColorPickerPro
                   editTarget?.groupId === "personal" ? editTarget.index : undefined
                 }
                 onApply={(hex) => {
-                  applyColor(hex);
+                  applyFromSheet(hex);
                   closeEditor();
                 }}
                 onSavePersonal={(hex) => {
@@ -783,13 +811,13 @@ export function ColorPicker({ color, onChange, layout = "full" }: ColorPickerPro
                   } else {
                     handleSavePersonal(hex);
                   }
-                  applyColor(hex);
+                  applyFromSheet(hex);
                   closeEditor();
                 }}
                 onUpdateSlot={(hex) => {
                   if (editTarget?.groupId === "personal") {
                     setPersonalSlots(setPersonalSlot(editTarget.index, hex));
-                    applyColor(hex);
+                    applyFromSheet(hex);
                   }
                   closeEditor();
                 }}

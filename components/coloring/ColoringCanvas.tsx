@@ -20,6 +20,7 @@ import {
   HIGHLIGHTER_ALPHA,
   paintHighlighterSegment,
   paintStroke,
+  pressureWidthScale,
 } from "@/lib/coloring/strokes";
 import type { PlayerRole, SplitData } from "@/lib/types";
 import type { Tool } from "@/lib/coloring/strokes";
@@ -87,9 +88,16 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
       sizeRef.current = brushSize;
     }, [brushSize]);
 
-    // Drawing state.
+    // Drawing state. Exactly one pointer draws at a time; extra touches (a
+    // resting palm, a second finger) are ignored while it is active.
     const drawingRef = useRef(false);
     const lastRef = useRef<{ x: number; y: number } | null>(null);
+    const activePointerRef = useRef<{ id: number; type: string } | null>(null);
+    // Apple Pencil: timestamp of the last pen event (down/move/up, including
+    // hover) so palm touches near pencil use never start strokes, plus a
+    // smoothed pressure for width modulation.
+    const lastPenTimeRef = useRef(0);
+    const pressureRef = useRef(0.5);
 
     // Highlighter stroke buffer: the in-progress stroke is accumulated OPAQUE
     // here, previewed over the paint layer at HIGHLIGHTER_ALPHA each frame, and
@@ -214,7 +222,7 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [pageSrc, width, height, role, JSON.stringify(split)]);
 
-    const toCanvasCoords = (e: React.PointerEvent) => {
+    const toCanvasCoords = (e: { clientX: number; clientY: number }) => {
       const display = displayRef.current;
       if (!display) return { x: 0, y: 0 };
       const rect = display.getBoundingClientRect();
@@ -222,6 +230,38 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
         x: ((e.clientX - rect.left) / rect.width) * width,
         y: ((e.clientY - rect.top) / rect.height) * height,
       };
+    };
+
+    // Touches this soon after any pen activity are treated as a resting palm.
+    const TOUCH_REJECT_MS = 500;
+
+    const notePenActivity = (e: { pointerType: string }) => {
+      if (e.pointerType === "pen") lastPenTimeRef.current = performance.now();
+    };
+
+    const isPalmTouch = (e: React.PointerEvent) =>
+      e.pointerType === "touch" &&
+      (activePointerRef.current?.type === "pen" ||
+        performance.now() - lastPenTimeRef.current < TOUCH_REJECT_MS);
+
+    /** Width multiplier for the current segment; pressure only counts for pens. */
+    const segmentScale = (pointerType: string, rawPressure: number) => {
+      if (pointerType !== "pen") return 1;
+      // Light smoothing keeps width from flickering at 120Hz sample rates.
+      pressureRef.current = pressureRef.current * 0.5 + (rawPressure || 0.5) * 0.5;
+      return pressureWidthScale(toolRef.current, pressureRef.current);
+    };
+
+    /** Discard an in-flight stroke's paint (used when a palm stroke loses to the pen). */
+    const cancelActiveStroke = () => {
+      drawingRef.current = false;
+      lastRef.current = null;
+      activePointerRef.current = null;
+      if (highlighterActiveRef.current) {
+        highlighterActiveRef.current = false;
+        strokeBufCtxRef.current?.clearRect(0, 0, width, height);
+      }
+      restore(historyIndexRef.current);
     };
 
     const clipToMask = () => {
@@ -235,11 +275,12 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
 
     const strokeSegment = (
       from: { x: number; y: number },
-      to: { x: number; y: number }
+      to: { x: number; y: number },
+      widthScale = 1
     ) => {
       const ctx = paintCtxRef.current;
       if (!ctx) return;
-      const size = sizeRef.current;
+      const size = sizeRef.current * widthScale;
 
       if (highlighterActiveRef.current) {
         const sctx = strokeBufCtxRef.current;
@@ -284,36 +325,67 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
     const onPointerDown = (e: React.PointerEvent) => {
       if (!ready) return;
       e.preventDefault();
+      notePenActivity(e);
+      // Palm rejection: fingers don't draw while (or just after) the pencil is in use.
+      if (isPalmTouch(e)) return;
+      if (activePointerRef.current !== null) {
+        if (e.pointerType === "pen" && activePointerRef.current.type === "touch") {
+          // The pencil landing mid touch-stroke means that touch was a palm:
+          // drop its paint and let the pencil take over.
+          cancelActiveStroke();
+        } else {
+          return; // second finger while a stroke is in progress
+        }
+      }
       (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
       const pt = toCanvasCoords(e);
       if (toolRef.current === "fill") {
         doFill(pt);
         return;
       }
+      activePointerRef.current = { id: e.pointerId, type: e.pointerType };
+      pressureRef.current = e.pointerType === "pen" ? e.pressure || 0.5 : 0.5;
       drawingRef.current = true;
       lastRef.current = pt;
       if (toolRef.current === "highlighter" && strokeBufCtxRef.current) {
         strokeBufCtxRef.current.clearRect(0, 0, width, height);
         highlighterActiveRef.current = true;
       }
-      strokeSegment(pt, pt);
+      strokeSegment(pt, pt, segmentScale(e.pointerType, e.pressure));
       redraw();
     };
 
     const onPointerMove = (e: React.PointerEvent) => {
+      notePenActivity(e);
       if (!drawingRef.current) return;
+      if (activePointerRef.current && e.pointerId !== activePointerRef.current.id) return;
       e.preventDefault();
-      const pt = toCanvasCoords(e);
-      const last = lastRef.current ?? pt;
-      strokeSegment(last, pt);
-      lastRef.current = pt;
+      // Apple Pencil delivers samples faster than pointermove fires; walk the
+      // coalesced batch so fast strokes stay smooth instead of chording.
+      const native = e.nativeEvent;
+      const samples: { clientX: number; clientY: number; pressure: number }[] =
+        native.getCoalescedEvents && native.getCoalescedEvents().length > 0
+          ? native.getCoalescedEvents()
+          : [native];
+      let last = lastRef.current ?? toCanvasCoords(samples[0]);
+      for (const sample of samples) {
+        const pt = toCanvasCoords(sample);
+        strokeSegment(last, pt, segmentScale(e.pointerType, sample.pressure));
+        last = pt;
+      }
+      lastRef.current = last;
       redraw();
     };
 
-    const endStroke = () => {
+    const endStroke = (e?: React.PointerEvent) => {
+      if (e) notePenActivity(e);
+      if (e && activePointerRef.current && e.pointerId !== activePointerRef.current.id) {
+        return; // a rejected palm/second finger lifting must not end the pen stroke
+      }
       if (!drawingRef.current) return;
       drawingRef.current = false;
       lastRef.current = null;
+      activePointerRef.current = null;
       if (highlighterActiveRef.current) {
         // Commit the whole stroke to the paint layer at fixed alpha (the buffer
         // is already mask-clipped), then drop the preview.
