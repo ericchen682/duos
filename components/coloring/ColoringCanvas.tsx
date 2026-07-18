@@ -16,7 +16,11 @@ import {
   overlayOutsideMask,
 } from "@/lib/coloring/imageUtils";
 import { deriveMask } from "@/lib/coloring/mask";
-import { paintStroke } from "@/lib/coloring/strokes";
+import {
+  HIGHLIGHTER_ALPHA,
+  paintHighlighterSegment,
+  paintStroke,
+} from "@/lib/coloring/strokes";
 import type { PlayerRole, SplitData } from "@/lib/types";
 import type { Tool } from "@/lib/coloring/strokes";
 
@@ -87,6 +91,15 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
     const drawingRef = useRef(false);
     const lastRef = useRef<{ x: number; y: number } | null>(null);
 
+    // Highlighter stroke buffer: the in-progress stroke is accumulated OPAQUE
+    // here, previewed over the paint layer at HIGHLIGHTER_ALPHA each frame, and
+    // composited onto the paint layer once on stroke end. That keeps opacity
+    // uniform within a stroke (self-overlap never darkens) while separate
+    // strokes still layer translucently. One buffer, reused across strokes.
+    const strokeBufRef = useRef<HTMLCanvasElement | null>(null);
+    const strokeBufCtxRef = useRef<CanvasRenderingContext2D | null>(null);
+    const highlighterActiveRef = useRef(false);
+
     // History (index-based full-state snapshots).
     const historyRef = useRef<ImageData[]>([]);
     const historyIndexRef = useRef(0);
@@ -112,6 +125,12 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
       ctx.fillStyle = "#ffffff";
       ctx.fillRect(0, 0, width, height);
       ctx.drawImage(paint, 0, 0);
+      // Live highlighter preview: the whole in-progress stroke at fixed alpha.
+      if (highlighterActiveRef.current && strokeBufRef.current) {
+        ctx.globalAlpha = HIGHLIGHTER_ALPHA;
+        ctx.drawImage(strokeBufRef.current, 0, 0);
+        ctx.globalAlpha = 1;
+      }
       // Line art is drawn with "multiply" so a white/opaque line-art background
       // keeps the paint visible underneath while the dark outlines stay dark.
       ctx.globalCompositeOperation = "multiply";
@@ -171,6 +190,15 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
         paintRef.current = paint;
         paintCtxRef.current = pctx;
 
+        const strokeBuf = document.createElement("canvas");
+        strokeBuf.width = width;
+        strokeBuf.height = height;
+        const sctx = strokeBuf.getContext("2d");
+        if (!sctx) return;
+        strokeBufRef.current = strokeBuf;
+        strokeBufCtxRef.current = sctx;
+        highlighterActiveRef.current = false;
+
         historyRef.current = [pctx.getImageData(0, 0, width, height)];
         historyIndexRef.current = 0;
         emitHistory();
@@ -212,6 +240,20 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
       const ctx = paintCtxRef.current;
       if (!ctx) return;
       const size = sizeRef.current;
+
+      if (highlighterActiveRef.current) {
+        const sctx = strokeBufCtxRef.current;
+        const maskCanvas = maskCanvasRef.current;
+        if (!sctx) return;
+        paintHighlighterSegment(sctx, from, to, size, colorRef.current);
+        if (maskCanvas) {
+          sctx.globalCompositeOperation = "destination-in";
+          sctx.drawImage(maskCanvas, 0, 0);
+          sctx.globalCompositeOperation = "source-over";
+        }
+        return;
+      }
+
       const currentTool = toolRef.current;
       if (currentTool === "fill") return;
 
@@ -250,6 +292,10 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
       }
       drawingRef.current = true;
       lastRef.current = pt;
+      if (toolRef.current === "highlighter" && strokeBufCtxRef.current) {
+        strokeBufCtxRef.current.clearRect(0, 0, width, height);
+        highlighterActiveRef.current = true;
+      }
       strokeSegment(pt, pt);
       redraw();
     };
@@ -268,6 +314,19 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
       if (!drawingRef.current) return;
       drawingRef.current = false;
       lastRef.current = null;
+      if (highlighterActiveRef.current) {
+        // Commit the whole stroke to the paint layer at fixed alpha (the buffer
+        // is already mask-clipped), then drop the preview.
+        const ctx = paintCtxRef.current;
+        const buf = strokeBufRef.current;
+        highlighterActiveRef.current = false;
+        if (ctx && buf) {
+          ctx.globalAlpha = HIGHLIGHTER_ALPHA;
+          ctx.drawImage(buf, 0, 0);
+          ctx.globalAlpha = 1;
+        }
+        redraw();
+      }
       snapshot();
     };
 
