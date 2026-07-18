@@ -93,8 +93,8 @@ export function PlayView({
       </div>
 
       {!isDone && (
-        <div className="sticky top-2 z-10 space-y-2">
-          <Panel className="bg-[var(--duos-surface)]/95 p-3 backdrop-blur-md sm:p-4">
+        <div className="sticky top-2 z-20 space-y-2 overflow-visible">
+          <Panel className="overflow-visible bg-[var(--duos-surface)]/95 p-3 backdrop-blur-md sm:p-4">
             <Toolbar
               tool={tool}
               onToolChange={setTool}
@@ -107,7 +107,7 @@ export function PlayView({
               canRedo={history.canRedo}
             />
           </Panel>
-          <Panel className="bg-[var(--duos-surface)]/95 p-3 backdrop-blur-md sm:p-4">
+          <Panel className="overflow-visible bg-[var(--duos-surface)]/95 p-3 backdrop-blur-md sm:p-4">
             <ColorPicker color={color} onChange={setColor} layout="compact" />
           </Panel>
         </div>

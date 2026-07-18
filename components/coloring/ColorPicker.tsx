@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   contrastText,
   hexToHsv,
@@ -12,6 +13,7 @@ import {
   shadeRamp,
   type HSV,
 } from "@/lib/coloring/colorUtils";
+import { clampPopoverNearAnchor } from "@/lib/coloring/anchorPopover";
 import { QUICK_PICKS } from "@/lib/coloring/palette";
 import {
   addToPersonalPalette,
@@ -50,21 +52,22 @@ function SwatchButton({
   c: string | null;
   selected: boolean;
   onPick: (c: string) => void;
-  onLongPress?: () => void;
+  /** Long-press passes the button element so the editor can anchor nearby. */
+  onLongPress?: (el: HTMLElement) => void;
   /** Tap handler for empty slots (e.g. save the current color into the slot). */
   onEmptyPick?: () => void;
   size?: "sm" | "md";
   empty?: boolean;
   label?: string;
 }) {
-  const dim = size === "sm" ? "h-9 w-9" : "h-10 w-10";
-  // iPad: suppress the iOS long-press callout/text-selection (which fires
-  // pointercancel and kills the timer) and the 350ms double-tap-zoom delay.
-  // touch-action stays `manipulation` so the scrollable swatch row still pans.
+  // Dense visual swatch with ≥44px hit area (ui-ux-pro-max touch targets).
+  const visual = size === "sm" ? "h-8 w-8" : "h-9 w-9";
+  const hit = "flex min-h-11 min-w-11 shrink-0 items-center justify-center";
   const touchSafe = "touch-manipulation select-none [-webkit-touch-callout:none]";
   const longPressTriggered = useRef(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pressStart = useRef<{ x: number; y: number } | null>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
 
   const clearTimer = () => {
     if (timerRef.current) {
@@ -80,15 +83,20 @@ function SwatchButton({
         type="button"
         onClick={() => onEmptyPick?.()}
         aria-label={label ?? "Empty color slot"}
-        className={`${dim} ${touchSafe} shrink-0 rounded-full border-2 border-dashed border-[var(--duos-border)] bg-white text-sm text-[var(--duos-ink-muted)] transition hover:border-[var(--duos-accent)] hover:text-[var(--duos-accent)] active:scale-95`}
+        className={`${hit} ${touchSafe} rounded-full text-sm text-[var(--duos-ink-muted)] transition hover:text-[var(--duos-accent)] active:scale-95`}
       >
-        +
+        <span
+          className={`${visual} flex items-center justify-center rounded-full border-2 border-dashed border-[var(--duos-border)] bg-white hover:border-[var(--duos-accent)]`}
+        >
+          +
+        </span>
       </button>
     );
   }
 
   return (
     <button
+      ref={btnRef}
       type="button"
       onClick={() => {
         if (longPressTriggered.current) {
@@ -103,7 +111,7 @@ function SwatchButton({
           pressStart.current = { x: e.clientX, y: e.clientY };
           timerRef.current = setTimeout(() => {
             longPressTriggered.current = true;
-            onLongPress();
+            if (btnRef.current) onLongPress(btnRef.current);
           }, 450);
         }
       }}
@@ -122,22 +130,26 @@ function SwatchButton({
       }}
       aria-label={label ?? `Color ${c}`}
       aria-pressed={selected}
-      className={`${dim} ${touchSafe} shrink-0 rounded-full border-2 shadow-sm transition active:scale-95 ${
-        selected
-          ? "scale-105 border-[var(--duos-ink)] ring-2 ring-[var(--duos-ink)] ring-offset-1"
-          : "border-black/10"
-      }`}
-      style={{ backgroundColor: c }}
+      className={`${hit} ${touchSafe} rounded-full transition active:scale-95`}
     >
-      {selected && (
-        <span
-          className="pointer-events-none flex h-full w-full items-center justify-center text-[11px] font-bold"
-          style={{ color: contrastText(c) }}
-          aria-hidden
-        >
-          ✓
-        </span>
-      )}
+      <span
+        className={`${visual} flex items-center justify-center rounded-full border-2 shadow-sm ${
+          selected
+            ? "scale-105 border-[var(--duos-ink)] ring-2 ring-[var(--duos-ink)] ring-offset-1"
+            : "border-black/10"
+        }`}
+        style={{ backgroundColor: c }}
+      >
+        {selected && (
+          <span
+            className="pointer-events-none text-[10px] font-bold"
+            style={{ color: contrastText(c) }}
+            aria-hidden
+          >
+            ✓
+          </span>
+        )}
+      </span>
     </button>
   );
 }
@@ -397,6 +409,9 @@ export function ColorPicker({ color, onChange, layout = "full" }: ColorPickerPro
   const [editTarget, setEditTarget] = useState<SwatchEditTarget | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
   const [editorColor, setEditorColor] = useState(color);
+  const [editorAnchor, setEditorAnchor] = useState<DOMRect | null>(null);
+  const [editorPos, setEditorPos] = useState<{ top: number; left: number } | null>(null);
+  const editorPanelRef = useRef<HTMLDivElement>(null);
 
   // Mirror of the current color so gesture-end commits never read a stale
   // closure (moves can outpace renders on 120Hz touch screens).
@@ -439,11 +454,36 @@ export function ColorPicker({ color, onChange, layout = "full" }: ColorPickerPro
     [applyColor, editTarget]
   );
 
-  const openEditor = useCallback((initial: string, target?: SwatchEditTarget) => {
+  const closeEditor = useCallback(() => {
+    setEditorOpen(false);
+    setEditTarget(null);
+    setEditorAnchor(null);
+    setEditorPos(null);
+  }, []);
+
+  const openEditor = useCallback((initial: string, el?: HTMLElement, target?: SwatchEditTarget) => {
     setEditorColor(initial);
     setEditTarget(target ?? null);
+    setEditorAnchor(el?.getBoundingClientRect() ?? null);
     setEditorOpen(true);
   }, []);
+
+  useLayoutEffect(() => {
+    if (!editorOpen || !editorAnchor || !editorPanelRef.current) return;
+    const rect = editorPanelRef.current.getBoundingClientRect();
+    setEditorPos(
+      clampPopoverNearAnchor(editorAnchor, rect.width || 320, rect.height || 420)
+    );
+  }, [editorOpen, editorAnchor, editorColor]);
+
+  useEffect(() => {
+    if (!editorOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") closeEditor();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [editorOpen, closeEditor]);
 
   // HSV stays the source of truth during custom-picker drags (HsvArea keeps a
   // gesture-local mirror); recents are committed once per gesture on
@@ -477,15 +517,17 @@ export function ColorPicker({ color, onChange, layout = "full" }: ColorPickerPro
     ...recents.slice(0, 5),
     ...personalColors,
     ...QUICK_PICKS,
-  ]);
+  ]).slice(0, 6);
+
+  const swatchGridClass = "grid grid-cols-8 gap-0.5 sm:grid-cols-9 sm:gap-1";
 
   const quickTab = (
-    <div className="space-y-3">
+    <div className="space-y-2">
       <div>
-        <p className="mb-1.5 text-[10px] font-bold uppercase tracking-wide text-[var(--duos-ink-muted)]">
+        <p className="mb-1 text-[10px] font-bold uppercase tracking-wide text-[var(--duos-ink-muted)]">
           My colors
         </p>
-        <div className="flex flex-wrap gap-1.5">
+        <div className={swatchGridClass}>
           {personalSlots.map((slot, i) => (
             <SwatchButton
               key={`personal-${i}`}
@@ -494,8 +536,8 @@ export function ColorPicker({ color, onChange, layout = "full" }: ColorPickerPro
               selected={slot !== null && slot.toLowerCase() === color.toLowerCase()}
               onPick={applyColor}
               onEmptyPick={() => setPersonalSlots(setPersonalSlot(i, colorRef.current))}
-              onLongPress={() =>
-                openEditor(slot ?? color, {
+              onLongPress={(el) =>
+                openEditor(slot ?? color, el, {
                   kind: "preset",
                   groupId: "personal",
                   index: i,
@@ -507,23 +549,23 @@ export function ColorPicker({ color, onChange, layout = "full" }: ColorPickerPro
             />
           ))}
         </div>
-        <p className="mt-1.5 text-[10px] text-[var(--duos-ink-muted)]">
-          Tap + to save the current color · long-press a swatch to edit
+        <p className="mt-1 text-[10px] text-[var(--duos-ink-muted)]">
+          Tap + to save · long-press to edit
         </p>
       </div>
 
       <div>
-        <p className="mb-1.5 text-[10px] font-bold uppercase tracking-wide text-[var(--duos-ink-muted)]">
+        <p className="mb-1 text-[10px] font-bold uppercase tracking-wide text-[var(--duos-ink-muted)]">
           Quick picks
         </p>
-        <div className="flex flex-wrap gap-1.5">
+        <div className={swatchGridClass}>
           {QUICK_PICKS.map((c) => (
             <SwatchButton
               key={c}
               c={c}
               selected={c.toLowerCase() === color.toLowerCase()}
               onPick={applyColor}
-              onLongPress={() => openEditor(c)}
+              onLongPress={(el) => openEditor(c, el)}
               size="sm"
             />
           ))}
@@ -532,17 +574,17 @@ export function ColorPicker({ color, onChange, layout = "full" }: ColorPickerPro
 
       {recents.length > 0 && (
         <div>
-          <p className="mb-1.5 text-[10px] font-bold uppercase tracking-wide text-[var(--duos-ink-muted)]">
+          <p className="mb-1 text-[10px] font-bold uppercase tracking-wide text-[var(--duos-ink-muted)]">
             Recent
           </p>
-          <div className="flex flex-wrap gap-1.5">
+          <div className={swatchGridClass}>
             {recents.map((c) => (
               <SwatchButton
                 key={`recent-${c}`}
                 c={c}
                 selected={c.toLowerCase() === color.toLowerCase()}
                 onPick={applyColor}
-                onLongPress={() => openEditor(c)}
+                onLongPress={(el) => openEditor(c, el)}
                 size="sm"
               />
             ))}
@@ -553,22 +595,22 @@ export function ColorPicker({ color, onChange, layout = "full" }: ColorPickerPro
   );
 
   const paletteTab = (
-    <div className="space-y-3">
-      <p className="text-xs text-[var(--duos-ink-muted)]">Long-press a swatch to tweak or replace it.</p>
+    <div className="space-y-2">
+      <p className="text-[10px] text-[var(--duos-ink-muted)]">Long-press a swatch to edit.</p>
       {paletteGroups.map((group) => (
         <div key={group.id}>
-          <p className="mb-1.5 text-[10px] font-bold uppercase tracking-wide text-[var(--duos-ink-muted)]">
+          <p className="mb-1 text-[10px] font-bold uppercase tracking-wide text-[var(--duos-ink-muted)]">
             {group.label}
           </p>
-          <div className="flex flex-wrap gap-1.5">
+          <div className={swatchGridClass}>
             {group.colors.map((c, i) => (
               <SwatchButton
                 key={`${group.id}-${i}`}
                 c={c}
                 selected={c.toLowerCase() === color.toLowerCase()}
                 onPick={applyColor}
-                onLongPress={() =>
-                  openEditor(c, {
+                onLongPress={(el) =>
+                  openEditor(c, el, {
                     kind: "preset",
                     groupId: group.id,
                     index: i,
@@ -601,112 +643,130 @@ export function ColorPicker({ color, onChange, layout = "full" }: ColorPickerPro
   );
 
   return (
-    <div data-testid="color-picker">
-      <div className="flex items-center gap-2">
-        <button
-          type="button"
-          onClick={() => {
-            if (!sheetOpen || tab !== "custom") setCustomBaseline(colorRef.current);
-            setSheetOpen(true);
-            setTab("custom");
-          }}
-          aria-label="Current color"
-          className="h-10 w-10 shrink-0 touch-manipulation select-none rounded-full border-2 border-[var(--duos-ink)] shadow-sm ring-2 ring-[var(--duos-ink)] ring-offset-1"
-          style={{ backgroundColor: color }}
-        />
-
-        <div
-          className="flex min-w-0 flex-1 gap-1.5 overflow-x-auto pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-          role="list"
-          aria-label="Color swatches"
-        >
-          {collapsedSwatches.map((c) => (
-            <SwatchButton
-              key={`collapsed-${c}`}
-              c={c}
-              selected={c.toLowerCase() === color.toLowerCase()}
-              onPick={applyColor}
-              onLongPress={() => openEditor(c)}
-              size="sm"
-            />
-          ))}
-        </div>
-
-        {isCompact && (
+    <div data-testid="color-picker" className="relative">
+      <div className="flex items-start gap-2">
+        {/* Vertical collapsed rail */}
+        <div className="flex w-12 shrink-0 flex-col items-center gap-0.5">
           <button
             type="button"
-            onClick={() => setSheetOpen((v) => !v)}
-            aria-expanded={sheetOpen}
-            className="flex h-10 shrink-0 touch-manipulation select-none items-center rounded-xl border border-[var(--duos-border)] bg-[var(--duos-surface)] px-3 text-xs font-bold text-[var(--duos-ink-muted)] transition hover:border-[var(--duos-accent)]"
+            onClick={() => {
+              if (!sheetOpen || tab !== "custom") setCustomBaseline(colorRef.current);
+              setSheetOpen(true);
+              setTab("custom");
+            }}
+            aria-label="Current color"
+            className="flex min-h-11 min-w-11 touch-manipulation select-none items-center justify-center rounded-full"
           >
-            {sheetOpen ? "Less" : "Colors"}
+            <span
+              className="h-9 w-9 rounded-full border-2 border-[var(--duos-ink)] shadow-sm ring-2 ring-[var(--duos-ink)] ring-offset-1"
+              style={{ backgroundColor: color }}
+            />
           </button>
-        )}
-      </div>
 
-      <div
-        className={`grid transition-[grid-template-rows,opacity] duration-300 ease-[cubic-bezier(0.2,0.8,0.2,1)] ${
-          sheetOpen ? "[grid-template-rows:1fr] opacity-100" : "[grid-template-rows:0fr] opacity-0"
-        }`}
-        inert={!sheetOpen}
-      >
-        <div className="min-h-0 overflow-hidden">
-          <div className="pt-2">
-            <div className="space-y-3 rounded-[var(--radius-panel)] border border-[var(--duos-border)] bg-[var(--duos-surface)] p-3 shadow-sm">
-              <ShadeStrip base={shadeBase} current={color} onPick={applyShade} />
-              <TabBar tab={tab} onTabChange={handleTabChange} />
-              {tab === "quick" && quickTab}
-              {tab === "palette" && paletteTab}
-              {tab === "custom" && customPanel}
-            </div>
+          <div
+            className="flex flex-col items-center gap-0.5"
+            role="list"
+            aria-label="Color swatches"
+          >
+            {collapsedSwatches.map((c) => (
+              <SwatchButton
+                key={`collapsed-${c}`}
+                c={c}
+                selected={c.toLowerCase() === color.toLowerCase()}
+                onPick={applyColor}
+                onLongPress={(el) => openEditor(c, el)}
+                size="sm"
+              />
+            ))}
+          </div>
+
+          {isCompact && (
+            <button
+              type="button"
+              onClick={() => setSheetOpen((v) => !v)}
+              aria-expanded={sheetOpen}
+              className="mt-0.5 flex min-h-11 min-w-11 touch-manipulation select-none flex-col items-center justify-center rounded-xl border border-[var(--duos-border)] bg-[var(--duos-surface)] px-1 text-[10px] font-bold leading-tight text-[var(--duos-ink-muted)] transition hover:border-[var(--duos-accent)]"
+            >
+              {sheetOpen ? "Less" : "Colors"}
+            </button>
+          )}
+        </div>
+
+        {/* Sideways expand sheet */}
+        <div
+          className={`min-w-0 overflow-hidden transition-[max-width,opacity] duration-300 ease-[cubic-bezier(0.2,0.8,0.2,1)] motion-reduce:transition-none ${
+            sheetOpen
+              ? "max-w-[min(100%,36rem)] flex-1 opacity-100"
+              : "pointer-events-none max-w-0 opacity-0"
+          }`}
+          inert={!sheetOpen}
+        >
+          <div className="w-[min(100vw-5rem,36rem)] space-y-2 rounded-[var(--radius-panel)] border border-[var(--duos-border)] bg-[var(--duos-surface)] p-2.5 shadow-sm sm:p-3">
+            <ShadeStrip base={shadeBase} current={color} onPick={applyShade} />
+            <TabBar tab={tab} onTabChange={handleTabChange} />
+            {tab === "quick" && quickTab}
+            {tab === "palette" && paletteTab}
+            {tab === "custom" && customPanel}
           </div>
         </div>
       </div>
 
-      {editorOpen && (
-        <div className="mt-2">
-          <SwatchEditor
-            initialColor={editorColor}
-            target={
-              editTarget && editTarget.groupId !== "personal" ? editTarget : undefined
-            }
-            personalSlotIndex={
-              editTarget?.groupId === "personal" ? editTarget.index : undefined
-            }
-            onApply={(hex) => {
-              applyColor(hex);
-              setEditorOpen(false);
-              setEditTarget(null);
-            }}
-            onSavePersonal={(hex) => {
-              if (editTarget?.groupId === "personal") {
-                setPersonalSlots(setPersonalSlot(editTarget.index, hex));
-              } else {
-                handleSavePersonal(hex);
-              }
-              applyColor(hex);
-              setEditorOpen(false);
-              setEditTarget(null);
-            }}
-            onUpdateSlot={(hex) => {
-              if (editTarget?.groupId === "personal") {
-                setPersonalSlots(setPersonalSlot(editTarget.index, hex));
-                applyColor(hex);
-              }
-              setEditorOpen(false);
-              setEditTarget(null);
-            }}
-            onReplacePreset={(hex) => {
-              handleReplacePreset(hex);
-              setEditorOpen(false);
-            }}
-            onClose={() => {
-              setEditorOpen(false);
-              setEditTarget(null);
-            }}
-          />
-        </div>
-      )}
+      {editorOpen &&
+        typeof document !== "undefined" &&
+        createPortal(
+          <>
+            <div
+              className="fixed inset-0 z-40"
+              aria-hidden
+              onPointerDown={closeEditor}
+            />
+            <div
+              ref={editorPanelRef}
+              className="fixed z-50 w-[min(100vw-1.5rem,20rem)] animate-pop-in motion-reduce:animate-none"
+              style={{
+                top: editorPos?.top ?? 12,
+                left: editorPos?.left ?? 12,
+                visibility: editorPos ? "visible" : "hidden",
+              }}
+            >
+              <SwatchEditor
+                initialColor={editorColor}
+                target={
+                  editTarget && editTarget.groupId !== "personal" ? editTarget : undefined
+                }
+                personalSlotIndex={
+                  editTarget?.groupId === "personal" ? editTarget.index : undefined
+                }
+                onApply={(hex) => {
+                  applyColor(hex);
+                  closeEditor();
+                }}
+                onSavePersonal={(hex) => {
+                  if (editTarget?.groupId === "personal") {
+                    setPersonalSlots(setPersonalSlot(editTarget.index, hex));
+                  } else {
+                    handleSavePersonal(hex);
+                  }
+                  applyColor(hex);
+                  closeEditor();
+                }}
+                onUpdateSlot={(hex) => {
+                  if (editTarget?.groupId === "personal") {
+                    setPersonalSlots(setPersonalSlot(editTarget.index, hex));
+                    applyColor(hex);
+                  }
+                  closeEditor();
+                }}
+                onReplacePreset={(hex) => {
+                  handleReplacePreset(hex);
+                  closeEditor();
+                }}
+                onClose={closeEditor}
+              />
+            </div>
+          </>,
+          document.body
+        )}
     </div>
   );
 }

@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef, useState } from "react";
 import {
   PEN_TOOLS,
   TOOL_SIZE_MAX,
@@ -198,6 +199,127 @@ function IconButton({
   );
 }
 
+function SizePopover({
+  brushSize,
+  onBrushSizeChange,
+}: {
+  brushSize: number;
+  onBrushSizeChange: (s: number) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [mounted, setMounted] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointer = (e: PointerEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("pointerdown", onPointer);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("pointerdown", onPointer);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  // Avoid SSR/client mismatch when brushSize is restored from localStorage.
+  if (!mounted) {
+    return <div className="h-11 w-16 shrink-0" aria-hidden />;
+  }
+
+  return (
+    <div ref={rootRef} className="relative z-30">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        aria-label={`Tool size, ${brushSize}`}
+        className="flex h-11 min-w-11 touch-manipulation select-none items-center justify-center gap-2 rounded-2xl border border-[var(--duos-border)] bg-[var(--duos-surface)] px-3 shadow-sm transition hover:border-[var(--duos-accent)] active:scale-95"
+      >
+        <span
+          className="rounded-full bg-[var(--duos-ink)]"
+          style={{
+            width: Math.max(6, brushSize / 3),
+            height: Math.max(6, brushSize / 3),
+          }}
+          aria-hidden
+        />
+        <span className="text-xs font-bold tabular-nums text-[var(--duos-ink-muted)]">
+          {brushSize}
+        </span>
+      </button>
+
+      {open && (
+        <div
+          role="group"
+          aria-label="Tool size"
+          className="absolute left-full top-0 z-30 ml-3 flex w-56 flex-col gap-2 rounded-2xl border border-[var(--duos-border)] bg-[var(--duos-surface)] p-2 shadow-[var(--shadow-card)] animate-pop-in motion-reduce:animate-none"
+        >
+          <div className="flex flex-col gap-1">
+            {BRUSH_SIZES.map((s) => (
+              <button
+                key={s}
+                type="button"
+                onClick={() => onBrushSizeChange(s)}
+                aria-pressed={brushSize === s}
+                aria-label={`Tool size ${s}`}
+                className={`flex min-h-11 w-full touch-manipulation select-none items-center gap-3 rounded-xl px-3 transition ${
+                  brushSize === s
+                    ? "bg-[var(--duos-ink)] text-white"
+                    : "bg-[var(--duos-surface-raised)] text-[var(--duos-ink)] hover:bg-[var(--duos-border)]"
+                }`}
+              >
+                <span
+                  className="rounded-full"
+                  style={{
+                    width: Math.max(6, s / 3),
+                    height: Math.max(6, s / 3),
+                    backgroundColor: brushSize === s ? "#fff" : "var(--duos-ink-muted)",
+                  }}
+                />
+                <span className="text-xs font-bold tabular-nums">{s}</span>
+              </button>
+            ))}
+          </div>
+          <label className="flex min-h-11 items-center gap-2 rounded-xl border border-[var(--duos-border)] bg-[var(--duos-surface-raised)] px-3">
+            <span className="sr-only">Custom tool size</span>
+            <input
+              type="range"
+              min={TOOL_SIZE_MIN}
+              max={TOOL_SIZE_MAX}
+              step={1}
+              value={brushSize}
+              onChange={(e) => onBrushSizeChange(Number(e.target.value))}
+              className="min-w-0 flex-1 accent-[var(--duos-accent)]"
+              aria-label={`Custom tool size, ${brushSize}`}
+              aria-valuemin={TOOL_SIZE_MIN}
+              aria-valuemax={TOOL_SIZE_MAX}
+              aria-valuenow={brushSize}
+            />
+            <span
+              className="w-7 shrink-0 text-center text-xs font-bold tabular-nums text-[var(--duos-ink-muted)]"
+              aria-hidden
+            >
+              {brushSize}
+            </span>
+          </label>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function Toolbar({
   tool,
   onToolChange,
@@ -210,7 +332,7 @@ export function Toolbar({
   canRedo,
 }: ToolbarProps) {
   return (
-    <div className="flex flex-wrap items-center gap-3">
+    <div className="relative z-20 flex flex-wrap items-center gap-3 overflow-visible">
       <div
         className="flex min-w-0 max-w-full gap-2 overflow-x-auto pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
         role="toolbar"
@@ -242,57 +364,7 @@ export function Toolbar({
       </div>
 
       {toolUsesSize(tool) && (
-        <div
-          className="flex min-w-0 flex-1 items-center gap-2 rounded-2xl border border-[var(--duos-border)] bg-[var(--duos-surface)] p-1 px-2 shadow-sm sm:flex-none"
-          role="group"
-          aria-label="Tool size"
-        >
-          {BRUSH_SIZES.map((s) => (
-            <button
-              key={s}
-              type="button"
-              onClick={() => onBrushSizeChange(s)}
-              aria-pressed={brushSize === s}
-              aria-label={`Tool size ${s}`}
-              className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl transition ${
-                brushSize === s
-                  ? "bg-[var(--duos-ink)]"
-                  : "bg-[var(--duos-surface-raised)] hover:bg-[var(--duos-border)]"
-              }`}
-            >
-              <span
-                className="rounded-full"
-                style={{
-                  width: Math.max(6, s / 3),
-                  height: Math.max(6, s / 3),
-                  backgroundColor: brushSize === s ? "#fff" : "var(--duos-ink-muted)",
-                }}
-              />
-            </button>
-          ))}
-          <label className="flex min-h-11 min-w-[6.5rem] flex-1 items-center gap-2 px-1 sm:min-w-[8.5rem]">
-            <span className="sr-only">Custom tool size</span>
-            <input
-              type="range"
-              min={TOOL_SIZE_MIN}
-              max={TOOL_SIZE_MAX}
-              step={1}
-              value={brushSize}
-              onChange={(e) => onBrushSizeChange(Number(e.target.value))}
-              className="min-w-0 flex-1 accent-[var(--duos-accent)]"
-              aria-label={`Custom tool size, ${brushSize}`}
-              aria-valuemin={TOOL_SIZE_MIN}
-              aria-valuemax={TOOL_SIZE_MAX}
-              aria-valuenow={brushSize}
-            />
-            <span
-              className="w-7 shrink-0 text-center text-xs font-bold tabular-nums text-[var(--duos-ink-muted)]"
-              aria-hidden
-            >
-              {brushSize}
-            </span>
-          </label>
-        </div>
+        <SizePopover brushSize={brushSize} onBrushSizeChange={onBrushSizeChange} />
       )}
 
       <div className="flex items-center gap-1.5">
