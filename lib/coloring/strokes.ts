@@ -140,6 +140,11 @@ export function paintHighlighterSegment(
   ctx.lineTo(from.x + ox, from.y + oy);
   ctx.moveTo(to.x - ox, to.y - oy);
   ctx.lineTo(to.x + ox, to.y + oy);
+  // Center line keeps the mark continuous when the drag direction is parallel
+  // to the chisel edge (degenerate parallelogram); elsewhere it is hidden
+  // inside the opaque parallelogram.
+  ctx.moveTo(from.x, from.y);
+  ctx.lineTo(to.x, to.y);
   ctx.stroke();
 
   // Parallelogram swept by the tip between the two points.
