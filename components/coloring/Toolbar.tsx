@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef, useState } from "react";
 import {
   PEN_TOOLS,
   TOOL_SIZE_MAX,
@@ -13,11 +14,17 @@ export type { Tool, PenTool };
 export { PEN_TOOLS, toolUsesSize, TOOL_SIZE_MIN, TOOL_SIZE_MAX };
 export const BRUSH_SIZES = [6, 14, 28, 48];
 
+type Orientation = "horizontal" | "vertical";
+
 interface ToolbarProps {
   tool: Tool;
   onToolChange: (t: Tool) => void;
   brushSize: number;
   onBrushSizeChange: (s: number) => void;
+  orientation?: Orientation;
+}
+
+interface HistoryControlsProps {
   onUndo: () => void;
   onRedo: () => void;
   onClear: () => void;
@@ -148,11 +155,13 @@ function ToolButton({
   Icon,
   selected,
   onSelect,
+  iconOnly = false,
 }: {
   label: string;
   Icon: () => React.ReactElement;
   selected: boolean;
   onSelect: () => void;
+  iconOnly?: boolean;
 }) {
   return (
     <button
@@ -161,14 +170,16 @@ function ToolButton({
       aria-pressed={selected}
       aria-label={label}
       title={label}
-      className={`flex min-h-11 shrink-0 items-center gap-1.5 rounded-xl px-2.5 py-2 text-sm font-bold transition sm:px-3 ${
+      className={`flex min-h-11 shrink-0 items-center rounded-xl text-sm font-bold transition ${
+        iconOnly ? "w-11 justify-center" : "gap-1.5 px-2.5 py-2 sm:px-3"
+      } ${
         selected
           ? "bg-[var(--duos-ink)] text-white shadow"
           : "text-[var(--duos-ink-muted)] hover:bg-[var(--duos-surface-raised)]"
       }`}
     >
       <Icon />
-      <span className="hidden md:inline">{label}</span>
+      {!iconOnly && <span className="hidden md:inline">{label}</span>}
     </button>
   );
 }
@@ -198,17 +209,237 @@ function IconButton({
   );
 }
 
-export function Toolbar({
-  tool,
-  onToolChange,
+function SizePresetButtons({
   brushSize,
   onBrushSizeChange,
+}: {
+  brushSize: number;
+  onBrushSizeChange: (s: number) => void;
+}) {
+  return (
+    <>
+      {BRUSH_SIZES.map((s) => (
+        <button
+          key={s}
+          type="button"
+          onClick={() => onBrushSizeChange(s)}
+          aria-pressed={brushSize === s}
+          aria-label={`Tool size ${s}`}
+          className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl transition ${
+            brushSize === s
+              ? "bg-[var(--duos-ink)]"
+              : "bg-[var(--duos-surface-raised)] hover:bg-[var(--duos-border)]"
+          }`}
+        >
+          <span
+            className="rounded-full"
+            style={{
+              width: Math.max(6, s / 3),
+              height: Math.max(6, s / 3),
+              backgroundColor: brushSize === s ? "#fff" : "var(--duos-ink-muted)",
+            }}
+          />
+        </button>
+      ))}
+    </>
+  );
+}
+
+function SizeSlider({
+  brushSize,
+  onBrushSizeChange,
+}: {
+  brushSize: number;
+  onBrushSizeChange: (s: number) => void;
+}) {
+  return (
+    <label className="flex min-h-11 min-w-[6.5rem] flex-1 items-center gap-2 px-1 sm:min-w-[8.5rem]">
+      <span className="sr-only">Custom tool size</span>
+      <input
+        type="range"
+        min={TOOL_SIZE_MIN}
+        max={TOOL_SIZE_MAX}
+        step={1}
+        value={brushSize}
+        onChange={(e) => onBrushSizeChange(Number(e.target.value))}
+        className="min-w-0 flex-1 accent-[var(--duos-accent)]"
+        aria-label={`Custom tool size, ${brushSize}`}
+        aria-valuemin={TOOL_SIZE_MIN}
+        aria-valuemax={TOOL_SIZE_MAX}
+        aria-valuenow={brushSize}
+      />
+      <span
+        className="w-7 shrink-0 text-center text-xs font-bold tabular-nums text-[var(--duos-ink-muted)]"
+        aria-hidden
+      >
+        {brushSize}
+      </span>
+    </label>
+  );
+}
+
+/**
+ * Vertical-rail size control: a single button showing the current size that
+ * opens a popover (presets + slider) beside the rail. Keeps the rail narrow
+ * while leaving the slider finger-sized on iPad.
+ */
+function SizePopover({
+  brushSize,
+  onBrushSizeChange,
+}: {
+  brushSize: number;
+  onBrushSizeChange: (s: number) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (e: PointerEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    window.addEventListener("pointerdown", onPointerDown);
+    return () => window.removeEventListener("pointerdown", onPointerDown);
+  }, [open]);
+
+  return (
+    <div ref={rootRef} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        aria-label={`Tool size, ${brushSize}`}
+        title={`Tool size, ${brushSize}`}
+        className={`flex h-11 w-11 items-center justify-center rounded-2xl border border-[var(--duos-border)] shadow-sm transition ${
+          open
+            ? "bg-[var(--duos-ink)]"
+            : "bg-[var(--duos-surface)] hover:bg-[var(--duos-surface-raised)]"
+        }`}
+      >
+        <span
+          className="rounded-full"
+          style={{
+            width: Math.min(24, Math.max(6, brushSize / 3)),
+            height: Math.min(24, Math.max(6, brushSize / 3)),
+            backgroundColor: open ? "#fff" : "var(--duos-ink-muted)",
+          }}
+        />
+      </button>
+      {open && (
+        <div
+          role="group"
+          aria-label="Tool size"
+          className="absolute bottom-0 left-full z-20 ml-3 w-64 rounded-2xl border border-[var(--duos-border)] bg-[var(--duos-surface)] p-2 shadow-[var(--shadow-card)]"
+        >
+          <div className="flex items-center justify-between gap-1">
+            <SizePresetButtons brushSize={brushSize} onBrushSizeChange={onBrushSizeChange} />
+          </div>
+          <div className="mt-1 flex">
+            <SizeSlider brushSize={brushSize} onBrushSizeChange={onBrushSizeChange} />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function HistoryControls({
   onUndo,
   onRedo,
   onClear,
   canUndo,
   canRedo,
+}: HistoryControlsProps) {
+  return (
+    <div className="flex items-center gap-1.5" role="group" aria-label="History">
+      <IconButton onClick={onUndo} disabled={!canUndo} title="Undo">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>
+          <path
+            d="M9 14 4 9l5-5M4 9h10.5a5.5 5.5 0 0 1 0 11H11"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      </IconButton>
+      <IconButton onClick={onRedo} disabled={!canRedo} title="Redo">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>
+          <path
+            d="m15 14 5-5-5-5M20 9H9.5a5.5 5.5 0 0 0 0 11H13"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      </IconButton>
+      <IconButton onClick={onClear} title="Clear my half">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>
+          <path
+            d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      </IconButton>
+    </div>
+  );
+}
+
+export function Toolbar({
+  tool,
+  onToolChange,
+  brushSize,
+  onBrushSizeChange,
+  orientation = "horizontal",
 }: ToolbarProps) {
+  if (orientation === "vertical") {
+    return (
+      <div
+        className="flex flex-col items-center gap-2"
+        role="toolbar"
+        aria-label="Drawing tools"
+        aria-orientation="vertical"
+      >
+        <div className="flex flex-col gap-1 rounded-2xl border border-[var(--duos-border)] bg-[var(--duos-surface)] p-1 shadow-sm">
+          {penMeta.map((t) => (
+            <ToolButton
+              key={t.id}
+              label={t.label}
+              Icon={t.Icon}
+              selected={tool === t.id}
+              onSelect={() => onToolChange(t.id)}
+              iconOnly
+            />
+          ))}
+        </div>
+
+        <div className="flex flex-col gap-1 rounded-2xl border border-[var(--duos-border)] bg-[var(--duos-surface)] p-1 shadow-sm">
+          {utilityMeta.map((t) => (
+            <ToolButton
+              key={t.id}
+              label={t.label}
+              Icon={t.Icon}
+              selected={tool === t.id}
+              onSelect={() => onToolChange(t.id)}
+              iconOnly
+            />
+          ))}
+        </div>
+
+        {toolUsesSize(tool) && (
+          <SizePopover brushSize={brushSize} onBrushSizeChange={onBrushSizeChange} />
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-wrap items-center gap-3">
       <div
@@ -247,89 +478,10 @@ export function Toolbar({
           role="group"
           aria-label="Tool size"
         >
-          {BRUSH_SIZES.map((s) => (
-            <button
-              key={s}
-              type="button"
-              onClick={() => onBrushSizeChange(s)}
-              aria-pressed={brushSize === s}
-              aria-label={`Tool size ${s}`}
-              className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl transition ${
-                brushSize === s
-                  ? "bg-[var(--duos-ink)]"
-                  : "bg-[var(--duos-surface-raised)] hover:bg-[var(--duos-border)]"
-              }`}
-            >
-              <span
-                className="rounded-full"
-                style={{
-                  width: Math.max(6, s / 3),
-                  height: Math.max(6, s / 3),
-                  backgroundColor: brushSize === s ? "#fff" : "var(--duos-ink-muted)",
-                }}
-              />
-            </button>
-          ))}
-          <label className="flex min-h-11 min-w-[6.5rem] flex-1 items-center gap-2 px-1 sm:min-w-[8.5rem]">
-            <span className="sr-only">Custom tool size</span>
-            <input
-              type="range"
-              min={TOOL_SIZE_MIN}
-              max={TOOL_SIZE_MAX}
-              step={1}
-              value={brushSize}
-              onChange={(e) => onBrushSizeChange(Number(e.target.value))}
-              className="min-w-0 flex-1 accent-[var(--duos-accent)]"
-              aria-label={`Custom tool size, ${brushSize}`}
-              aria-valuemin={TOOL_SIZE_MIN}
-              aria-valuemax={TOOL_SIZE_MAX}
-              aria-valuenow={brushSize}
-            />
-            <span
-              className="w-7 shrink-0 text-center text-xs font-bold tabular-nums text-[var(--duos-ink-muted)]"
-              aria-hidden
-            >
-              {brushSize}
-            </span>
-          </label>
+          <SizePresetButtons brushSize={brushSize} onBrushSizeChange={onBrushSizeChange} />
+          <SizeSlider brushSize={brushSize} onBrushSizeChange={onBrushSizeChange} />
         </div>
       )}
-
-      <div className="flex items-center gap-1.5">
-        <IconButton onClick={onUndo} disabled={!canUndo} title="Undo">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>
-            <path
-              d="M9 14 4 9l5-5M4 9h10.5a5.5 5.5 0 0 1 0 11H11"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-        </IconButton>
-        <IconButton onClick={onRedo} disabled={!canRedo} title="Redo">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>
-            <path
-              d="m15 14 5-5-5-5M20 9H9.5a5.5 5.5 0 0 0 0 11H13"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-        </IconButton>
-        <IconButton onClick={onClear} title="Clear my half">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>
-            <path
-              d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-        </IconButton>
-      </div>
     </div>
   );
 }
