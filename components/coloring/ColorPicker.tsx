@@ -412,6 +412,7 @@ export function ColorPicker({ color, onChange, layout = "full" }: ColorPickerPro
   const [editorAnchor, setEditorAnchor] = useState<DOMRect | null>(null);
   const [editorPos, setEditorPos] = useState<{ top: number; left: number } | null>(null);
   const editorPanelRef = useRef<HTMLDivElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
 
   // Mirror of the current color so gesture-end commits never read a stale
   // closure (moves can outpace renders on 120Hz touch screens).
@@ -529,6 +530,25 @@ export function ColorPicker({ color, onChange, layout = "full" }: ColorPickerPro
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
+  }, [isCompact, sheetOpen, editorOpen]);
+
+  // Outside-tap dismissal for the open sheet. A document-level capture
+  // listener instead of a fixed backdrop element: ancestors of the picker use
+  // backdrop-blur, which turns position:fixed descendants into panel-sized
+  // boxes (a fixed backdrop silently covered nothing outside the panel).
+  // Stopping the event here also keeps the closing tap from drawing a stroke.
+  useEffect(() => {
+    if (!isCompact || !sheetOpen || editorOpen) return;
+    const onDocPointerDown = (e: PointerEvent) => {
+      const root = rootRef.current;
+      if (!root || (e.target instanceof Node && root.contains(e.target))) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setSheetOpen(false);
+    };
+    document.addEventListener("pointerdown", onDocPointerDown, { capture: true });
+    return () =>
+      document.removeEventListener("pointerdown", onDocPointerDown, { capture: true });
   }, [isCompact, sheetOpen, editorOpen]);
 
   // HSV stays the source of truth during custom-picker drags (HsvArea keeps a
@@ -684,11 +704,10 @@ export function ColorPicker({ color, onChange, layout = "full" }: ColorPickerPro
   );
 
   return (
-    <div data-testid="color-picker" className="relative">
+    <div ref={rootRef} data-testid="color-picker" className="relative">
       <div className="flex items-start gap-2">
-        {/* Vertical collapsed rail; kept above the sheet backdrop so its
-            swatches stay tappable while the sheet is open. */}
-        <div className="relative z-40 flex w-12 shrink-0 flex-col items-center gap-0.5">
+        {/* Vertical collapsed rail */}
+        <div className="flex w-12 shrink-0 flex-col items-center gap-0.5">
           <button
             type="button"
             onClick={() => {
@@ -765,15 +784,6 @@ export function ColorPicker({ color, onChange, layout = "full" }: ColorPickerPro
         </div>
       </div>
 
-      {/* Transparent backdrop while the sheet is open: any tap outside it (on
-          every breakpoint) closes the sheet instead of reaching the canvas. */}
-      {isCompact && sheetOpen && (
-        <div
-          className="fixed inset-0 z-30"
-          aria-hidden
-          onPointerDown={() => setSheetOpen(false)}
-        />
-      )}
 
       {editorOpen &&
         typeof document !== "undefined" &&
