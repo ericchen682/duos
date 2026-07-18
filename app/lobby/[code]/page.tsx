@@ -195,7 +195,11 @@ export default function LobbyPage() {
   const isCreator = role === "A";
 
   return (
-    <main className="mx-auto w-full max-w-2xl px-4 py-6 sm:px-6 sm:py-10">
+    <main
+      className={`mx-auto w-full px-4 py-6 sm:px-6 sm:py-10 ${
+        lobby.status === "playing" ? "max-w-7xl" : "max-w-2xl"
+      }`}
+    >
       <div className="mb-6 flex items-center justify-between">
         <BackLink href="/">Duos</BackLink>
         <Badge tone="accent">Room {code}</Badge>
