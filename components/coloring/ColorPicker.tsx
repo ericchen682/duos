@@ -51,14 +51,20 @@ function SwatchButton({
   label?: string;
 }) {
   const dim = size === "sm" ? "h-9 w-9" : "h-10 w-10";
+  // iPad: suppress the iOS long-press callout/text-selection (which fires
+  // pointercancel and kills the timer) and the 350ms double-tap-zoom delay.
+  // touch-action stays `manipulation` so the scrollable swatch row still pans.
+  const touchSafe = "touch-manipulation select-none [-webkit-touch-callout:none]";
   const longPressTriggered = useRef(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pressStart = useRef<{ x: number; y: number } | null>(null);
 
   const clearTimer = () => {
     if (timerRef.current) {
       clearTimeout(timerRef.current);
       timerRef.current = null;
     }
+    pressStart.current = null;
   };
 
   if (empty || !c) {
@@ -67,7 +73,7 @@ function SwatchButton({
         type="button"
         onClick={() => onLongPress?.()}
         aria-label={label ?? "Empty color slot"}
-        className={`${dim} shrink-0 rounded-full border-2 border-dashed border-[var(--duos-border)] bg-white text-sm text-[var(--duos-ink-muted)] transition hover:border-[var(--duos-accent)]`}
+        className={`${dim} ${touchSafe} shrink-0 rounded-full border-2 border-dashed border-[var(--duos-border)] bg-white text-sm text-[var(--duos-ink-muted)] transition hover:border-[var(--duos-accent)]`}
       >
         +
       </button>
@@ -84,21 +90,32 @@ function SwatchButton({
         }
         onPick(c);
       }}
-      onPointerDown={() => {
+      onPointerDown={(e) => {
         longPressTriggered.current = false;
         if (onLongPress) {
+          pressStart.current = { x: e.clientX, y: e.clientY };
           timerRef.current = setTimeout(() => {
             longPressTriggered.current = true;
             onLongPress();
           }, 450);
         }
       }}
+      onPointerMove={(e) => {
+        // A press that wanders ~10px is a scroll, not a long-press.
+        if (!timerRef.current || !pressStart.current) return;
+        const dx = e.clientX - pressStart.current.x;
+        const dy = e.clientY - pressStart.current.y;
+        if (dx * dx + dy * dy > 100) clearTimer();
+      }}
       onPointerUp={clearTimer}
       onPointerCancel={clearTimer}
       onPointerLeave={clearTimer}
+      onContextMenu={(e) => {
+        if (onLongPress) e.preventDefault();
+      }}
       aria-label={label ?? `Color ${c}`}
       aria-pressed={selected}
-      className={`${dim} shrink-0 rounded-full border-2 shadow-sm transition active:scale-95 ${
+      className={`${dim} ${touchSafe} shrink-0 rounded-full border-2 shadow-sm transition active:scale-95 ${
         selected
           ? "scale-105 border-[var(--duos-ink)] ring-2 ring-[var(--duos-ink)] ring-offset-1"
           : "border-black/10"
@@ -205,6 +222,10 @@ function CustomPickerPanel({
             }}
             className="mt-1 w-full min-h-10 rounded-xl border border-[var(--duos-border)] bg-white px-3 font-mono text-sm uppercase tracking-wider text-[var(--duos-ink)] outline-none focus:border-[var(--duos-accent)] focus:ring-2 focus:ring-[var(--duos-accent-soft)]"
             spellCheck={false}
+            autoCapitalize="none"
+            autoCorrect="off"
+            autoComplete="off"
+            enterKeyHint="done"
             data-testid="hex-input"
           />
         </label>
@@ -214,6 +235,8 @@ function CustomPickerPanel({
               {ch.toUpperCase()}
               <input
                 type="number"
+                inputMode="numeric"
+                enterKeyHint="done"
                 min={0}
                 max={255}
                 value={rgb[ch]}
@@ -262,7 +285,7 @@ function TabBar({
           role="tab"
           aria-selected={tab === t.id}
           onClick={() => onTabChange(t.id)}
-          className={`min-h-9 flex-1 rounded-lg px-2 text-xs font-bold transition ${
+          className={`min-h-9 flex-1 touch-manipulation select-none rounded-lg px-2 text-xs font-bold transition ${
             tab === t.id
               ? "bg-[var(--duos-surface)] text-[var(--duos-ink)] shadow-sm"
               : "text-[var(--duos-ink-muted)] hover:text-[var(--duos-ink)]"
@@ -296,6 +319,10 @@ export function ColorPicker({ color, onChange, layout = "full" }: ColorPickerPro
   const hueRef = useRef<HTMLDivElement>(null);
   const draggingSv = useRef(false);
   const draggingHue = useRef(false);
+  // Mirrors of hsv/color state so pointermove handlers never read a stale
+  // closure (moves can outpace renders on 120Hz touch screens).
+  const hsvRef = useRef(hexToHsv(color));
+  const colorRef = useRef(normalizeHex(color));
 
   const paletteGroups = getEffectivePaletteGroups(overrides);
   const personalColors = filledPersonalColors(personalSlots);
@@ -303,9 +330,11 @@ export function ColorPicker({ color, onChange, layout = "full" }: ColorPickerPro
   const applyColor = useCallback(
     (hex: string, trackRecent = true) => {
       const normalized = normalizeHex(hex);
+      colorRef.current = normalized;
+      hsvRef.current = hexToHsv(normalized);
       onChange(normalized);
       setHexInput(normalized);
-      setHsv(hexToHsv(normalized));
+      setHsv(hsvRef.current);
       setRgb(hexToRgb(normalized));
       if (trackRecent) setRecents(pushRecentColor(normalized));
     },
@@ -332,12 +361,27 @@ export function ColorPicker({ color, onChange, layout = "full" }: ColorPickerPro
     setEditorOpen(true);
   }, []);
 
+  // HSV is the source of truth while dragging the custom picker: converting
+  // back through 8-bit hex loses hue/saturation near black and white, which
+  // made the hue drift (or snap to red) mid-drag. Recents are committed once
+  // per gesture on pointer-up instead of on every move, so we don't hammer
+  // localStorage at touch-move frequency.
   const updateFromHsv = useCallback(
     (next: { h: number; s: number; v: number }) => {
-      applyColor(hsvToHex(next));
+      const normalized = normalizeHex(hsvToHex(next));
+      hsvRef.current = next;
+      colorRef.current = normalized;
+      setHsv(next);
+      onChange(normalized);
+      setHexInput(normalized);
+      setRgb(hexToRgb(normalized));
     },
-    [applyColor]
+    [onChange]
   );
+
+  const commitRecent = useCallback(() => {
+    setRecents(pushRecentColor(colorRef.current));
+  }, []);
 
   const pickSv = (clientX: number, clientY: number) => {
     const el = svRef.current;
@@ -345,7 +389,7 @@ export function ColorPicker({ color, onChange, layout = "full" }: ColorPickerPro
     const rect = el.getBoundingClientRect();
     const s = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
     const v = Math.max(0, Math.min(1, 1 - (clientY - rect.top) / rect.height));
-    updateFromHsv({ ...hsv, s, v });
+    updateFromHsv({ ...hsvRef.current, s, v });
   };
 
   const pickHue = (clientX: number) => {
@@ -353,12 +397,12 @@ export function ColorPicker({ color, onChange, layout = "full" }: ColorPickerPro
     if (!el) return;
     const rect = el.getBoundingClientRect();
     const h = Math.max(0, Math.min(360, ((clientX - rect.left) / rect.width) * 360));
-    updateFromHsv({ ...hsv, h });
+    updateFromHsv({ ...hsvRef.current, h });
   };
 
   const onSvDown = (e: React.PointerEvent) => {
     e.preventDefault();
-    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+    e.currentTarget.setPointerCapture?.(e.pointerId);
     draggingSv.current = true;
     pickSv(e.clientX, e.clientY);
   };
@@ -368,12 +412,14 @@ export function ColorPicker({ color, onChange, layout = "full" }: ColorPickerPro
     pickSv(e.clientX, e.clientY);
   };
   const onSvUp = () => {
+    if (!draggingSv.current) return;
     draggingSv.current = false;
+    commitRecent();
   };
 
   const onHueDown = (e: React.PointerEvent) => {
     e.preventDefault();
-    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+    e.currentTarget.setPointerCapture?.(e.pointerId);
     draggingHue.current = true;
     pickHue(e.clientX);
   };
@@ -383,7 +429,9 @@ export function ColorPicker({ color, onChange, layout = "full" }: ColorPickerPro
     pickHue(e.clientX);
   };
   const onHueUp = () => {
+    if (!draggingHue.current) return;
     draggingHue.current = false;
+    commitRecent();
   };
 
   const collapsedSwatches = [
@@ -524,7 +572,7 @@ export function ColorPicker({ color, onChange, layout = "full" }: ColorPickerPro
             setTab("custom");
           }}
           aria-label="Current color"
-          className="h-10 w-10 shrink-0 rounded-full border-2 border-[var(--duos-ink)] shadow-sm ring-2 ring-[var(--duos-ink)] ring-offset-1"
+          className="h-10 w-10 shrink-0 touch-manipulation select-none rounded-full border-2 border-[var(--duos-ink)] shadow-sm ring-2 ring-[var(--duos-ink)] ring-offset-1"
           style={{ backgroundColor: color }}
         />
 
@@ -550,7 +598,7 @@ export function ColorPicker({ color, onChange, layout = "full" }: ColorPickerPro
             type="button"
             onClick={() => setSheetOpen((v) => !v)}
             aria-expanded={sheetOpen}
-            className="flex h-10 shrink-0 items-center rounded-xl border border-[var(--duos-border)] bg-[var(--duos-surface)] px-3 text-xs font-bold text-[var(--duos-ink-muted)] transition hover:border-[var(--duos-accent)]"
+            className="flex h-10 shrink-0 touch-manipulation select-none items-center rounded-xl border border-[var(--duos-border)] bg-[var(--duos-surface)] px-3 text-xs font-bold text-[var(--duos-ink-muted)] transition hover:border-[var(--duos-accent)]"
           >
             {sheetOpen ? "Less" : "Colors"}
           </button>
