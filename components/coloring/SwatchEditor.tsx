@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useState } from "react";
 import { hexToHsv, hsvToHex, normalizeHex } from "@/lib/coloring/colorUtils";
+import { HsvArea } from "@/components/coloring/HsvArea";
 import { Button } from "@/components/ui/Button";
 
 export interface SwatchEditTarget {
@@ -33,11 +34,9 @@ export function SwatchEditor({
   onClose,
 }: SwatchEditorProps) {
   const [hsv, setHsv] = useState(() => hexToHsv(initialColor));
+  // Captured once on mount so the "reset" half of the chip stays the original.
+  const [original] = useState(() => normalizeHex(initialColor));
   const color = normalizeHex(hsvToHex(hsv));
-
-  const updateHsv = useCallback((patch: Partial<typeof hsv>) => {
-    setHsv((prev) => ({ ...prev, ...patch }));
-  }, []);
 
   return (
     <div
@@ -47,18 +46,24 @@ export function SwatchEditor({
     >
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-3">
-          <span
-            className="h-12 w-12 shrink-0 rounded-xl border-2 border-black/10 shadow-inner"
-            style={{ backgroundColor: color }}
-            aria-hidden
-          />
+          <div className="flex shrink-0 overflow-hidden rounded-xl border-2 border-black/10 shadow-inner">
+            <button
+              type="button"
+              onClick={() => setHsv(hexToHsv(original))}
+              disabled={color === original}
+              aria-label={`Reset to original color ${original}`}
+              title="Tap to reset to the original color"
+              className="h-12 w-8 touch-manipulation select-none transition enabled:cursor-pointer enabled:active:brightness-90"
+              style={{ backgroundColor: original }}
+            />
+            <span className="h-12 w-8" style={{ backgroundColor: color }} aria-hidden />
+          </div>
           <div>
             <p className="font-display text-base font-bold text-[var(--duos-ink)]">Edit color</p>
-            {target && (
-              <p className="text-xs text-[var(--duos-ink-muted)]">
-                {target.label} — long-press to tweak presets
-              </p>
-            )}
+            <p className="text-xs text-[var(--duos-ink-muted)]">
+              {target ? `${target.label} · ` : ""}
+              <span className="font-mono uppercase tracking-wider">{color}</span>
+            </p>
           </div>
         </div>
         <button
@@ -71,41 +76,7 @@ export function SwatchEditor({
         </button>
       </div>
 
-      <div className="space-y-3">
-        <label className="block text-xs font-bold uppercase tracking-wide text-[var(--duos-ink-muted)]">
-          Hue
-          <input
-            type="range"
-            min={0}
-            max={360}
-            value={Math.round(hsv.h)}
-            onChange={(e) => updateHsv({ h: Number(e.target.value) })}
-            className="mt-1 w-full accent-[var(--duos-accent)]"
-          />
-        </label>
-        <label className="block text-xs font-bold uppercase tracking-wide text-[var(--duos-ink-muted)]">
-          Saturation
-          <input
-            type="range"
-            min={0}
-            max={100}
-            value={Math.round(hsv.s * 100)}
-            onChange={(e) => updateHsv({ s: Number(e.target.value) / 100 })}
-            className="mt-1 w-full accent-[var(--duos-accent)]"
-          />
-        </label>
-        <label className="block text-xs font-bold uppercase tracking-wide text-[var(--duos-ink-muted)]">
-          Brightness
-          <input
-            type="range"
-            min={0}
-            max={100}
-            value={Math.round(hsv.v * 100)}
-            onChange={(e) => updateHsv({ v: Number(e.target.value) / 100 })}
-            className="mt-1 w-full accent-[var(--duos-accent)]"
-          />
-        </label>
-      </div>
+      <HsvArea hsv={hsv} onChange={setHsv} svHeightClassName="h-32 sm:h-40" />
 
       <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
         <Button size="sm" onClick={() => onApply(color)}>
