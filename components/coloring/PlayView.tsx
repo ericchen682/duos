@@ -168,7 +168,9 @@ export function PlayView({
                 />
               </div>
             </Panel>
-            <Panel className="overflow-visible bg-[var(--duos-surface)]/95 p-3 backdrop-blur-md md:order-3 md:sticky md:top-2 md:z-20 md:w-72 md:shrink-0 md:self-start lg:w-80">
+            {/* Width comes from the rail; the expanded sheet floats over the
+                canvas instead of widening this panel. */}
+            <Panel className="overflow-visible bg-[var(--duos-surface)]/95 p-3 backdrop-blur-md md:order-3 md:sticky md:top-2 md:z-20 md:shrink-0 md:self-start">
               <ColorPicker color={color} onChange={setColor} layout="compact" />
             </Panel>
           </div>
