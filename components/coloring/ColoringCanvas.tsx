@@ -93,6 +93,29 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
     const drawingRef = useRef(false);
     const lastRef = useRef<{ x: number; y: number } | null>(null);
     const activePointerRef = useRef<{ id: number; type: string } | null>(null);
+    const strokeStartRef = useRef(0);
+
+    // Pinch-zoom view: CSS transform on the canvas wrapper, so pointer→canvas
+    // math keeps working unchanged (getBoundingClientRect reflects the scale).
+    const viewportRef = useRef<HTMLDivElement>(null);
+    const contentRef = useRef<HTMLDivElement>(null);
+    const viewRef = useRef({ scale: 1, tx: 0, ty: 0 });
+    const touchPtsRef = useRef(new Map<number, { x: number; y: number }>());
+    const pinchRef = useRef<{
+      ids: [number, number];
+      d0: number;
+      m0: { x: number; y: number };
+      s0: number;
+      tx0: number;
+      ty0: number;
+      rect: DOMRect;
+    } | null>(null);
+    // Pointers that must not draw for the rest of their contact (pinch
+    // fingers, the finger left over after a pinch, palms during a stroke).
+    const consumedRef = useRef(new Set<number>());
+    const zoomPillTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const [zoomPct, setZoomPct] = useState(100);
+    const [showZoomPill, setShowZoomPill] = useState(false);
     // Apple Pencil: timestamp of the last pen event (down/move/up, including
     // hover) so palm touches near pencil use never start strokes, plus a
     // smoothed pressure for width modulation.
@@ -211,6 +234,11 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
         historyIndexRef.current = 0;
         emitHistory();
 
+        // Fresh page starts at fit.
+        viewRef.current = { scale: 1, tx: 0, ty: 0 };
+        if (contentRef.current) contentRef.current.style.transform = "";
+        setZoomPct(100);
+
         redraw();
         setReady(true);
         onReadyChange?.(true);
@@ -221,6 +249,37 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
       };
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [pageSrc, width, height, role, JSON.stringify(split)]);
+
+    // Trackpad pinch and ctrl+wheel zoom at the cursor (macOS trackpads emit
+    // pinch as ctrl+wheel). Native non-passive listener: React's root wheel
+    // listener is passive, so preventDefault would be ignored there.
+    useEffect(() => {
+      const vp = viewportRef.current;
+      const content = contentRef.current;
+      if (!vp || !content) return;
+      const onWheel = (e: WheelEvent) => {
+        if (!e.ctrlKey && !e.metaKey) return;
+        e.preventDefault();
+        const rect = vp.getBoundingClientRect();
+        const m = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+        const { scale, tx, ty } = viewRef.current;
+        const target = Math.min(4, Math.max(1, scale * Math.exp(-e.deltaY * 0.01)));
+        const wx = (m.x - tx) / scale;
+        const wy = (m.y - ty) / scale;
+        const minTx = vp.clientWidth * (1 - target);
+        const minTy = vp.clientHeight * (1 - target);
+        const cx = Math.min(0, Math.max(minTx, m.x - wx * target));
+        const cy = Math.min(0, Math.max(minTy, m.y - wy * target));
+        viewRef.current = { scale: target, tx: cx, ty: cy };
+        content.style.transform = `translate(${cx}px, ${cy}px) scale(${target})`;
+        setZoomPct(Math.round(target * 100));
+        setShowZoomPill(true);
+        if (zoomPillTimerRef.current) clearTimeout(zoomPillTimerRef.current);
+        zoomPillTimerRef.current = setTimeout(() => setShowZoomPill(false), 700);
+      };
+      vp.addEventListener("wheel", onWheel, { passive: false });
+      return () => vp.removeEventListener("wheel", onWheel);
+    }, []);
 
     const toCanvasCoords = (e: { clientX: number; clientY: number }) => {
       const display = displayRef.current;
@@ -250,6 +309,94 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
       // Light smoothing keeps width from flickering at 120Hz sample rates.
       pressureRef.current = pressureRef.current * 0.5 + (rawPressure || 0.5) * 0.5;
       return pressureWidthScale(toolRef.current, pressureRef.current);
+    };
+
+    // ----- Pinch zoom -----
+
+    const MIN_ZOOM = 1;
+    const MAX_ZOOM = 4;
+    /** A touch stroke younger than this loses to a landing second finger (pinch). */
+    const PINCH_GRACE_MS = 250;
+
+    const applyView = (scale: number, tx: number, ty: number) => {
+      const vp = viewportRef.current;
+      const content = contentRef.current;
+      if (!vp || !content) return;
+      const s = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, scale));
+      // Content is viewport-sized at scale 1; clamp so no gaps appear at edges.
+      const minTx = vp.clientWidth * (1 - s);
+      const minTy = vp.clientHeight * (1 - s);
+      const cx = Math.min(0, Math.max(minTx, tx));
+      const cy = Math.min(0, Math.max(minTy, ty));
+      viewRef.current = { scale: s, tx: cx, ty: cy };
+      content.style.transform = `translate(${cx}px, ${cy}px) scale(${s})`;
+      setZoomPct(Math.round(s * 100));
+    };
+
+    const flashZoomPill = () => {
+      setShowZoomPill(true);
+      if (zoomPillTimerRef.current) clearTimeout(zoomPillTimerRef.current);
+      zoomPillTimerRef.current = setTimeout(() => setShowZoomPill(false), 700);
+    };
+
+    const startPinch = () => {
+      const pts = [...touchPtsRef.current.entries()];
+      const vp = viewportRef.current;
+      if (pts.length !== 2 || !vp) return;
+      const [[idA, a], [idB, b]] = pts;
+      const rect = vp.getBoundingClientRect();
+      pinchRef.current = {
+        ids: [idA, idB],
+        d0: Math.max(20, Math.hypot(b.x - a.x, b.y - a.y)),
+        m0: { x: (a.x + b.x) / 2 - rect.left, y: (a.y + b.y) / 2 - rect.top },
+        s0: viewRef.current.scale,
+        tx0: viewRef.current.tx,
+        ty0: viewRef.current.ty,
+        rect,
+      };
+      consumedRef.current.add(idA);
+      consumedRef.current.add(idB);
+      // Keep both fingers reporting to the canvas even if they wander off it.
+      for (const id of [idA, idB]) {
+        try {
+          displayRef.current?.setPointerCapture(id);
+        } catch {
+          // pointer already lifted — updatePinch simply won't see it
+        }
+      }
+      flashZoomPill();
+    };
+
+    const updatePinch = () => {
+      const pinch = pinchRef.current;
+      if (!pinch) return;
+      const a = touchPtsRef.current.get(pinch.ids[0]);
+      const b = touchPtsRef.current.get(pinch.ids[1]);
+      if (!a || !b) return;
+      const d = Math.max(20, Math.hypot(b.x - a.x, b.y - a.y));
+      const m = {
+        x: (a.x + b.x) / 2 - pinch.rect.left,
+        y: (a.y + b.y) / 2 - pinch.rect.top,
+      };
+      const s = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, pinch.s0 * (d / pinch.d0)));
+      // Keep the page point that started under the fingers' midpoint under it.
+      const wx = (pinch.m0.x - pinch.tx0) / pinch.s0;
+      const wy = (pinch.m0.y - pinch.ty0) / pinch.s0;
+      applyView(s, m.x - wx * s, m.y - wy * s);
+      flashZoomPill();
+    };
+
+    const resetZoom = () => {
+      const content = contentRef.current;
+      if (!content) return;
+      if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        content.style.transition = "transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1)";
+        window.setTimeout(() => {
+          content.style.transition = "";
+        }, 300);
+      }
+      applyView(1, 0, 0);
+      flashZoomPill();
     };
 
     /** Discard an in-flight stroke's paint (used when a palm stroke loses to the pen). */
@@ -326,6 +473,28 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
       if (!ready) return;
       e.preventDefault();
       notePenActivity(e);
+      if (e.pointerType === "touch") {
+        touchPtsRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (pinchRef.current || touchPtsRef.current.size > 2) {
+          consumedRef.current.add(e.pointerId); // third finger etc.
+          return;
+        }
+        if (touchPtsRef.current.size === 2 && activePointerRef.current?.type !== "pen") {
+          // Two fingers = zoom. A stroke the first finger just started was the
+          // beginning of this gesture, not a mark — undo it and pinch instead.
+          const strokeIsYoung =
+            drawingRef.current &&
+            performance.now() - strokeStartRef.current < PINCH_GRACE_MS;
+          if (!drawingRef.current || strokeIsYoung) {
+            if (drawingRef.current) cancelActiveStroke();
+            startPinch();
+            return;
+          }
+          consumedRef.current.add(e.pointerId); // palm during a committed stroke
+          return;
+        }
+      }
+      if (e.pointerType === "pen" && pinchRef.current) return; // no drawing mid-pinch
       // Palm rejection: fingers don't draw while (or just after) the pencil is in use.
       if (isPalmTouch(e)) return;
       if (activePointerRef.current !== null) {
@@ -346,6 +515,7 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
       activePointerRef.current = { id: e.pointerId, type: e.pointerType };
       pressureRef.current = e.pointerType === "pen" ? e.pressure || 0.5 : 0.5;
       drawingRef.current = true;
+      strokeStartRef.current = performance.now();
       lastRef.current = pt;
       if (toolRef.current === "highlighter" && strokeBufCtxRef.current) {
         strokeBufCtxRef.current.clearRect(0, 0, width, height);
@@ -357,6 +527,15 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
 
     const onPointerMove = (e: React.PointerEvent) => {
       notePenActivity(e);
+      if (e.pointerType === "touch" && touchPtsRef.current.has(e.pointerId)) {
+        touchPtsRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (pinchRef.current?.ids.includes(e.pointerId)) {
+          e.preventDefault();
+          updatePinch();
+          return;
+        }
+      }
+      if (consumedRef.current.has(e.pointerId)) return;
       if (!drawingRef.current) return;
       if (activePointerRef.current && e.pointerId !== activePointerRef.current.id) return;
       e.preventDefault();
@@ -378,7 +557,23 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
     };
 
     const endStroke = (e?: React.PointerEvent) => {
-      if (e) notePenActivity(e);
+      if (e) {
+        notePenActivity(e);
+        if (e.pointerType === "touch") {
+          touchPtsRef.current.delete(e.pointerId);
+          if (pinchRef.current?.ids.includes(e.pointerId)) {
+            // Pinch over. The finger still down stays consumed (inert) so it
+            // can't start a surprise stroke; it frees itself when it lifts.
+            pinchRef.current = null;
+            consumedRef.current.delete(e.pointerId);
+            return;
+          }
+          if (consumedRef.current.has(e.pointerId)) {
+            consumedRef.current.delete(e.pointerId);
+            return;
+          }
+        }
+      }
       if (e && activePointerRef.current && e.pointerId !== activePointerRef.current.id) {
         return; // a rejected palm/second finger lifting must not end the pen stroke
       }
@@ -439,19 +634,57 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
 
     return (
       <div className="relative w-full">
-        <canvas
-          ref={displayRef}
-          width={width}
-          height={height}
-          onPointerDown={onPointerDown}
-          onPointerMove={onPointerMove}
-          onPointerUp={endStroke}
-          onPointerCancel={endStroke}
-          onPointerLeave={endStroke}
-          onContextMenu={(e) => e.preventDefault()}
-          className="no-touch-scroll block w-full rounded-2xl border border-slate-200 bg-white shadow-sm"
-          style={{ aspectRatio: `${width} / ${height}`, cursor: "crosshair" }}
-        />
+        <div
+          ref={viewportRef}
+          className="no-touch-scroll relative w-full overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm"
+          style={{ aspectRatio: `${width} / ${height}` }}
+        >
+          <div ref={contentRef} className="h-full w-full" style={{ transformOrigin: "0 0" }}>
+            <canvas
+              ref={displayRef}
+              width={width}
+              height={height}
+              onPointerDown={onPointerDown}
+              onPointerMove={onPointerMove}
+              onPointerUp={endStroke}
+              onPointerCancel={endStroke}
+              onPointerLeave={endStroke}
+              onContextMenu={(e) => e.preventDefault()}
+              className="no-touch-scroll block h-full w-full"
+              style={{ cursor: "crosshair" }}
+            />
+          </div>
+
+          {/* Transient zoom readout while pinching */}
+          <div
+            aria-hidden
+            className={`pointer-events-none absolute left-1/2 top-3 z-10 -translate-x-1/2 rounded-full bg-[var(--duos-ink)]/85 px-3 py-1 text-xs font-bold tabular-nums text-white shadow transition-opacity duration-300 ${
+              showZoomPill ? "opacity-100" : "opacity-0"
+            }`}
+          >
+            {zoomPct}%
+          </div>
+
+          {/* Snap back to fit once zoomed in */}
+          {zoomPct > 100 && (
+            <button
+              type="button"
+              onClick={resetZoom}
+              aria-label={`Zoomed to ${zoomPct}%. Reset to fit.`}
+              className="absolute bottom-3 right-3 z-10 flex h-11 min-w-11 touch-manipulation select-none items-center gap-1.5 rounded-full border border-[var(--duos-border)] bg-white/90 px-3 text-xs font-bold tabular-nums text-[var(--duos-ink)] shadow-md backdrop-blur transition active:scale-95"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden>
+                <path
+                  d="M9 3H5a2 2 0 0 0-2 2v4M15 3h4a2 2 0 0 1 2 2v4M9 21H5a2 2 0 0 1-2-2v-4M15 21h4a2 2 0 0 0 2-2v-4"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                />
+              </svg>
+              {zoomPct}%
+            </button>
+          )}
+        </div>
         {!ready && (
           <div className="absolute inset-0 flex items-center justify-center rounded-2xl bg-white/70 text-sm font-semibold text-slate-500">
             Preparing your half…
