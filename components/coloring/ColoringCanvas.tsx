@@ -16,6 +16,7 @@ import {
   overlayOutsideMask,
 } from "@/lib/coloring/imageUtils";
 import { deriveMask } from "@/lib/coloring/mask";
+import { loadPaint, pruneStalePaints, savePaint } from "@/lib/coloring/paintStorage";
 import {
   HIGHLIGHTER_ALPHA,
   paintHighlighterSegment,
@@ -45,6 +46,9 @@ interface ColoringCanvasProps {
   brushSize: number;
   onReadyChange?: (ready: boolean) => void;
   onHistoryChange?: (state: { canUndo: boolean; canRedo: boolean }) => void;
+  /** When set, the paint layer is saved locally under this key and restored on
+      mount — refreshes and done/keep-coloring remounts keep the drawing. */
+  persistKey?: string;
 }
 
 export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasProps>(
@@ -60,6 +64,7 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
       brushSize,
       onReadyChange,
       onHistoryChange,
+      persistKey,
     },
     ref
   ) {
@@ -172,6 +177,43 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
       if (overlayRef.current) ctx.drawImage(overlayRef.current, 0, 0);
     }, [width, height]);
 
+    // Debounced local save of the paint layer, so refreshes and remounts
+    // (submit / keep coloring) restore the drawing instead of wiping it.
+    const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const persistDirtyRef = useRef(false);
+
+    const flushPersist = useCallback(() => {
+      if (persistTimerRef.current) {
+        clearTimeout(persistTimerRef.current);
+        persistTimerRef.current = null;
+      }
+      if (!persistKey || !persistDirtyRef.current) return;
+      const paint = paintRef.current;
+      if (!paint) return;
+      persistDirtyRef.current = false;
+      savePaint(persistKey, paint.toDataURL("image/png"));
+    }, [persistKey]);
+
+    const schedulePersist = useCallback(() => {
+      if (!persistKey) return;
+      persistDirtyRef.current = true;
+      if (persistTimerRef.current) return;
+      persistTimerRef.current = setTimeout(() => {
+        persistTimerRef.current = null;
+        flushPersist();
+      }, 500);
+    }, [persistKey, flushPersist]);
+
+    // A pending save must survive losing the component or the page.
+    useEffect(() => {
+      const onPageHide = () => flushPersist();
+      window.addEventListener("pagehide", onPageHide);
+      return () => {
+        window.removeEventListener("pagehide", onPageHide);
+        flushPersist();
+      };
+    }, [flushPersist]);
+
     const snapshot = useCallback(() => {
       const ctx = paintCtxRef.current;
       if (!ctx) return;
@@ -185,7 +227,8 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
       }
       historyIndexRef.current = stack.length - 1;
       emitHistory();
-    }, [width, height, emitHistory]);
+      schedulePersist();
+    }, [width, height, emitHistory, schedulePersist]);
 
     const restore = useCallback(
       (index: number) => {
@@ -244,6 +287,22 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
         if (!pctx) return;
         paintRef.current = paint;
         paintCtxRef.current = pctx;
+        persistDirtyRef.current = false;
+
+        // Restore the locally saved drawing, if any.
+        if (persistKey) {
+          pruneStalePaints(persistKey);
+          const saved = loadPaint(persistKey);
+          if (saved) {
+            try {
+              const savedImg = await loadImage(saved);
+              if (cancelled) return;
+              pctx.drawImage(savedImg, 0, 0, width, height);
+            } catch {
+              // corrupt entry — start fresh
+            }
+          }
+        }
 
         const strokeBuf = document.createElement("canvas");
         strokeBuf.width = width;
@@ -272,7 +331,7 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
         cancelled = true;
       };
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [pageSrc, width, height, role, JSON.stringify(split), retryNonce]);
+    }, [pageSrc, width, height, role, JSON.stringify(split), retryNonce, persistKey]);
 
     // Trackpad pinch and ctrl+wheel zoom at the cursor (macOS trackpads emit
     // pinch as ctrl+wheel). Native non-passive listener: React's root wheel
@@ -645,6 +704,7 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
             historyIndexRef.current -= 1;
             restore(historyIndexRef.current);
             emitHistory();
+            schedulePersist();
           }
         },
         redo() {
@@ -652,6 +712,7 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
             historyIndexRef.current += 1;
             restore(historyIndexRef.current);
             emitHistory();
+            schedulePersist();
           }
         },
         clear() {
@@ -669,7 +730,7 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
           });
         },
       }),
-      [restore, emitHistory, redraw, snapshot, width, height]
+      [restore, emitHistory, redraw, snapshot, schedulePersist, width, height]
     );
 
     return (

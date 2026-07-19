@@ -262,6 +262,7 @@ export default function LobbyPage() {
           partnerPresent={Boolean(partner)}
           onMarkDone={handleMarkDone}
           onKeepColoring={handleKeepColoring}
+          persistKey={`${lobby.id}:${role}`}
         />
       )}
 
