@@ -27,6 +27,10 @@ import type { PlayerRole, SplitData } from "@/lib/types";
 import type { Tool } from "@/lib/coloring/strokes";
 
 const MAX_HISTORY = 14;
+// Undo snapshots are full-size ImageData (w*h*4 bytes). Budget their total so
+// large uploaded pages can't balloon the heap and get the tab jettisoned by
+// iOS (which users see as a white flash + reload).
+const HISTORY_BYTE_BUDGET = 64 * 1024 * 1024;
 
 export interface ColoringCanvasHandle {
   undo: () => void;
@@ -204,15 +208,27 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
       }, 500);
     }, [persistKey, flushPersist]);
 
-    // A pending save must survive losing the component or the page.
+    // A pending save must survive losing the component or the page. iOS can
+    // jettison a backgrounded tab without ever firing pagehide, so also flush
+    // the moment the app goes to the background.
     useEffect(() => {
       const onPageHide = () => flushPersist();
+      const onVisibility = () => {
+        if (document.visibilityState === "hidden") flushPersist();
+      };
       window.addEventListener("pagehide", onPageHide);
+      document.addEventListener("visibilitychange", onVisibility);
       return () => {
         window.removeEventListener("pagehide", onPageHide);
+        document.removeEventListener("visibilitychange", onVisibility);
         flushPersist();
       };
     }, [flushPersist]);
+
+    const maxHistory = Math.max(
+      4,
+      Math.min(MAX_HISTORY, Math.floor(HISTORY_BYTE_BUDGET / (width * height * 4)))
+    );
 
     const snapshot = useCallback(() => {
       const ctx = paintCtxRef.current;
@@ -222,13 +238,13 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
       // Drop any redo branch, then push.
       stack.splice(historyIndexRef.current + 1);
       stack.push(state);
-      if (stack.length > MAX_HISTORY) {
+      while (stack.length > maxHistory) {
         stack.shift();
       }
       historyIndexRef.current = stack.length - 1;
       emitHistory();
       schedulePersist();
-    }, [width, height, emitHistory, schedulePersist]);
+    }, [width, height, maxHistory, emitHistory, schedulePersist]);
 
     const restore = useCallback(
       (index: number) => {
