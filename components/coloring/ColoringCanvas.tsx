@@ -376,10 +376,6 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
 
     // Touches this soon after any pen activity are treated as a resting palm.
     const TOUCH_REJECT_MS = 500;
-    // A "drawing" pen with no contact events for this long is an orphan from a
-    // lost pointerup (dead pencil battery, dropped event) — a real pencil in
-    // contact streams pressure samples continuously.
-    const STALE_PEN_MS = 2000;
 
     const notePenActivity = (e: { pointerType: string }) => {
       if (e.pointerType === "pen") lastPenTimeRef.current = performance.now();
@@ -572,14 +568,6 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
         }
         if (activePointerRef.current?.type === e.pointerType) {
           endStroke(); // commit whatever the orphaned stroke had painted
-        } else if (
-          e.pointerType === "touch" &&
-          activePointerRef.current?.type === "pen" &&
-          performance.now() - lastPenTimeRef.current > STALE_PEN_MS
-        ) {
-          // Cross-type heal: an orphaned pen stroke would otherwise palm-reject
-          // every finger forever (undo/redo fine, drawing dead).
-          endStroke();
         }
       }
       if (e.pointerType === "touch") {
@@ -603,11 +591,7 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
           return;
         }
       }
-      if (e.pointerType === "pen" && pinchRef.current) {
-        // The pencil beats a two-finger gesture (live or stale): end the pinch
-        // and let the pen draw. The gesture fingers stay inert until lifted.
-        pinchRef.current = null;
-      }
+      if (e.pointerType === "pen" && pinchRef.current) return; // no drawing mid-pinch
       // Palm rejection: fingers don't draw while (or just after) the pencil is in use.
       if (isPalmTouch(e)) return;
       if (activePointerRef.current !== null) {
