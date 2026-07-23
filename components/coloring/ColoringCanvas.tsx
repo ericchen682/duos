@@ -35,6 +35,12 @@ import type { PlayerRole, SplitData } from "@/lib/types";
 import type { Tool } from "@/lib/coloring/strokes";
 
 const MAX_HISTORY = 14;
+// Undo snapshots are full-canvas ImageData — the app's single biggest
+// allocation. iPad Safari jettisons tabs under memory pressure (a white
+// flash and a reload), so cap history by bytes, not just count: a 1500px
+// uploaded page would otherwise pin ~95MB in snapshots alone. Standard
+// 1000×750 pages still keep all 14 steps under this budget.
+const HISTORY_BYTE_BUDGET = 48 * 1024 * 1024;
 
 // Rounding for recorded op-log samples: 0.1px positions, 0.01 width scales.
 const r1 = (v: number) => Math.round(v * 10) / 10;
@@ -159,6 +165,10 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
     const historyIndexRef = useRef(0);
 
     const [ready, setReady] = useState(false);
+    // Init failure state: the line-art image failed to load after retries.
+    // Shown instead of the loading overlay, with a manual retry.
+    const [loadFailed, setLoadFailed] = useState(false);
+    const [loadAttempt, setLoadAttempt] = useState(0);
 
     const emitHistory = useCallback(() => {
       onHistoryChange?.({
@@ -266,6 +276,11 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
       };
     }, [flushPersist]);
 
+    const historyCap = Math.min(
+      MAX_HISTORY,
+      Math.max(2, Math.floor(HISTORY_BYTE_BUDGET / (width * height * 4)))
+    );
+
     const snapshot = useCallback(() => {
       const ctx = paintCtxRef.current;
       if (!ctx) return;
@@ -274,13 +289,13 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
       // Drop any redo branch, then push.
       stack.splice(historyIndexRef.current + 1);
       stack.push(state);
-      if (stack.length > MAX_HISTORY) {
+      while (stack.length > historyCap) {
         stack.shift();
       }
       historyIndexRef.current = stack.length - 1;
       emitHistory();
       schedulePersist();
-    }, [width, height, emitHistory, schedulePersist]);
+    }, [width, height, historyCap, emitHistory, schedulePersist]);
 
     const restore = useCallback(
       (index: number) => {
@@ -297,11 +312,27 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
     useEffect(() => {
       let cancelled = false;
       setReady(false);
+      setLoadFailed(false);
       onReadyChange?.(false);
 
       (async () => {
-        const img = await loadImage(pageSrc);
+        // The page image comes over the network (Supabase Storage for
+        // uploads); a failed load must not leave the "Preparing your half…"
+        // overlay up forever. Retry twice, then surface a retry button.
+        let img: HTMLImageElement | null = null;
+        for (let attempt = 0; attempt < 3 && !cancelled; attempt++) {
+          try {
+            img = await loadImage(pageSrc);
+            break;
+          } catch {
+            await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
+          }
+        }
         if (cancelled) return;
+        if (!img) {
+          setLoadFailed(true);
+          return;
+        }
         lineImgRef.current = img;
         lineDataRef.current = imageToImageData(img, width, height);
 
@@ -366,7 +397,7 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
         cancelled = true;
       };
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [pageSrc, width, height, role, JSON.stringify(split), persistKey]);
+    }, [pageSrc, width, height, role, JSON.stringify(split), persistKey, loadAttempt]);
 
     // Trackpad pinch and ctrl+wheel zoom at the cursor (macOS trackpads emit
     // pinch as ctrl+wheel). Native non-passive listener: React's root wheel
@@ -929,8 +960,21 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
           )}
         </div>
         {!ready && (
-          <div className="absolute inset-0 flex items-center justify-center rounded-2xl bg-white/70 text-sm font-semibold text-slate-500">
-            Preparing your half…
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 rounded-2xl bg-white/70 text-sm font-semibold text-slate-500">
+            {loadFailed ? (
+              <>
+                <span>We couldn&apos;t load this coloring page.</span>
+                <button
+                  type="button"
+                  onClick={() => setLoadAttempt((n) => n + 1)}
+                  className="min-h-11 touch-manipulation rounded-2xl bg-[var(--duos-accent)] px-5 font-bold text-white shadow transition active:scale-95"
+                >
+                  Try again
+                </button>
+              </>
+            ) : (
+              "Preparing your half…"
+            )}
           </div>
         )}
       </div>
