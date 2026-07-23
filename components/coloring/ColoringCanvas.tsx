@@ -35,6 +35,12 @@ import type { PlayerRole, SplitData } from "@/lib/types";
 import type { Tool } from "@/lib/coloring/strokes";
 
 const MAX_HISTORY = 14;
+// Undo snapshots are full-canvas ImageData — the app's single biggest
+// allocation. iPad Safari jettisons tabs under memory pressure (a white
+// flash and a reload), so cap history by bytes, not just count: a 1500px
+// uploaded page would otherwise pin ~95MB in snapshots alone. Standard
+// 1000×750 pages still keep all 14 steps under this budget.
+const HISTORY_BYTE_BUDGET = 48 * 1024 * 1024;
 
 // Rounding for recorded op-log samples: 0.1px positions, 0.01 width scales.
 const r1 = (v: number) => Math.round(v * 10) / 10;
@@ -131,12 +137,17 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
     // Pointers that must not draw for the rest of their contact (pinch
     // fingers, the finger left over after a pinch, palms during a stroke).
     const consumedRef = useRef(new Set<number>());
+    // A touch with the fill tool is only committed on release: if a second
+    // finger lands first, the touch was the start of a pinch, not a fill tap.
+    const pendingFillRef = useRef<{ id: number; x: number; y: number } | null>(null);
     const zoomPillTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const [zoomPct, setZoomPct] = useState(100);
     const [showZoomPill, setShowZoomPill] = useState(false);
-    // Apple Pencil: timestamp of the last pen event (down/move/up, including
-    // hover) so palm touches near pencil use never start strokes, plus a
-    // smoothed pressure for width modulation.
+    // Apple Pencil: timestamp of the last pen CONTACT (down, drawing move, up
+    // — never hover) so palm touches near pencil use don't start strokes,
+    // plus a smoothed pressure for width modulation. Hover must not count:
+    // an M2/Pro Pencil held near the screen hovers continuously, and treating
+    // that as activity would lock out finger drawing entirely.
     const lastPenTimeRef = useRef(0);
     const pressureRef = useRef(0.5);
 
@@ -154,6 +165,10 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
     const historyIndexRef = useRef(0);
 
     const [ready, setReady] = useState(false);
+    // Init failure state: the line-art image failed to load after retries.
+    // Shown instead of the loading overlay, with a manual retry.
+    const [loadFailed, setLoadFailed] = useState(false);
+    const [loadAttempt, setLoadAttempt] = useState(0);
 
     const emitHistory = useCallback(() => {
       onHistoryChange?.({
@@ -261,6 +276,11 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
       };
     }, [flushPersist]);
 
+    const historyCap = Math.min(
+      MAX_HISTORY,
+      Math.max(2, Math.floor(HISTORY_BYTE_BUDGET / (width * height * 4)))
+    );
+
     const snapshot = useCallback(() => {
       const ctx = paintCtxRef.current;
       if (!ctx) return;
@@ -269,13 +289,13 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
       // Drop any redo branch, then push.
       stack.splice(historyIndexRef.current + 1);
       stack.push(state);
-      if (stack.length > MAX_HISTORY) {
+      while (stack.length > historyCap) {
         stack.shift();
       }
       historyIndexRef.current = stack.length - 1;
       emitHistory();
       schedulePersist();
-    }, [width, height, emitHistory, schedulePersist]);
+    }, [width, height, historyCap, emitHistory, schedulePersist]);
 
     const restore = useCallback(
       (index: number) => {
@@ -292,11 +312,27 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
     useEffect(() => {
       let cancelled = false;
       setReady(false);
+      setLoadFailed(false);
       onReadyChange?.(false);
 
       (async () => {
-        const img = await loadImage(pageSrc);
+        // The page image comes over the network (Supabase Storage for
+        // uploads); a failed load must not leave the "Preparing your half…"
+        // overlay up forever. Retry twice, then surface a retry button.
+        let img: HTMLImageElement | null = null;
+        for (let attempt = 0; attempt < 3 && !cancelled; attempt++) {
+          try {
+            img = await loadImage(pageSrc);
+            break;
+          } catch {
+            await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
+          }
+        }
         if (cancelled) return;
+        if (!img) {
+          setLoadFailed(true);
+          return;
+        }
         lineImgRef.current = img;
         lineDataRef.current = imageToImageData(img, width, height);
 
@@ -361,7 +397,7 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
         cancelled = true;
       };
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [pageSrc, width, height, role, JSON.stringify(split), persistKey]);
+    }, [pageSrc, width, height, role, JSON.stringify(split), persistKey, loadAttempt]);
 
     // Trackpad pinch and ctrl+wheel zoom at the cursor (macOS trackpads emit
     // pinch as ctrl+wheel). Native non-passive listener: React's root wheel
@@ -394,6 +430,51 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
       return () => vp.removeEventListener("wheel", onWheel);
     }, []);
 
+    // Uncaptured pointers that lift outside the canvas (a palm sliding off
+    // the edge is the everyday case) deliver their pointerup elsewhere in the
+    // document, so the canvas handlers never see it and the finger would stay
+    // "down" in our bookkeeping forever. Window-level listeners catch every
+    // lift; for pointers the canvas already handled these are no-ops.
+    const endStrokeRef = useRef<() => void>(() => {});
+    useEffect(() => {
+      const release = (ev: PointerEvent) => {
+        if (ev.pointerType === "touch") {
+          if (pinchRef.current?.ids.includes(ev.pointerId)) pinchRef.current = null;
+          touchPtsRef.current.delete(ev.pointerId);
+          consumedRef.current.delete(ev.pointerId);
+          if (pendingFillRef.current?.id === ev.pointerId) pendingFillRef.current = null;
+        }
+        if (activePointerRef.current?.id === ev.pointerId) endStrokeRef.current();
+      };
+      window.addEventListener("pointerup", release);
+      window.addEventListener("pointercancel", release);
+      return () => {
+        window.removeEventListener("pointerup", release);
+        window.removeEventListener("pointercancel", release);
+      };
+    }, []);
+
+    // Rotating the iPad (or resizing the window) changes the viewport box the
+    // pan clamp was computed against; re-clamp so the zoomed canvas can't be
+    // left panned out of bounds with a gap at the edge.
+    useEffect(() => {
+      const onResize = () => {
+        const vp = viewportRef.current;
+        const content = contentRef.current;
+        if (!vp || !content) return;
+        const { scale, tx, ty } = viewRef.current;
+        if (scale <= 1) return;
+        const minTx = vp.clientWidth * (1 - scale);
+        const minTy = vp.clientHeight * (1 - scale);
+        const cx = Math.min(0, Math.max(minTx, tx));
+        const cy = Math.min(0, Math.max(minTy, ty));
+        viewRef.current = { scale, tx: cx, ty: cy };
+        content.style.transform = `translate(${cx}px, ${cy}px) scale(${scale})`;
+      };
+      window.addEventListener("resize", onResize);
+      return () => window.removeEventListener("resize", onResize);
+    }, []);
+
     const toCanvasCoords = (e: { clientX: number; clientY: number }) => {
       const display = displayRef.current;
       if (!display) return { x: 0, y: 0 };
@@ -404,12 +485,21 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
       };
     };
 
-    // Touches this soon after any pen activity are treated as a resting palm.
+    // Touches this soon after pen CONTACT are treated as a resting palm.
     const TOUCH_REJECT_MS = 500;
+    // An "active" pen with no contact events for this long lost its pointerup
+    // (dead Pencil battery, event swallowed by a system gesture). A pen that
+    // is really down streams pressure samples continuously, so a live stroke
+    // can never look stale.
+    const STALE_PEN_MS = 2000;
 
-    const notePenActivity = (e: { pointerType: string }) => {
+    const notePenContact = (e: { pointerType: string }) => {
       if (e.pointerType === "pen") lastPenTimeRef.current = performance.now();
     };
+
+    const penLooksStale = () =>
+      activePointerRef.current?.type === "pen" &&
+      performance.now() - lastPenTimeRef.current > STALE_PEN_MS;
 
     const isPalmTouch = (e: React.PointerEvent) =>
       e.pointerType === "touch" &&
@@ -469,6 +559,7 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
       };
       consumedRef.current.add(idA);
       consumedRef.current.add(idB);
+      pendingFillRef.current = null; // that first touch was a zoom, not a fill tap
       // Keep both fingers reporting to the canvas even if they wander off it.
       for (const id of [idA, idB]) {
         try {
@@ -587,7 +678,33 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
     const onPointerDown = (e: React.PointerEvent) => {
       if (!ready) return;
       e.preventDefault();
-      notePenActivity(e);
+      // --- Self-healing before anything else. A pointerup/cancel can be lost
+      // for good (Pencil battery dies, iOS swallows events during a system
+      // gesture); stale bookkeeping from that must never survive past the
+      // next pointerdown, or the canvas wedges into a "can't color" state.
+      if (e.pointerType === "pen") {
+        // The pencil outranks any two-finger gesture, live or stale: dissolve
+        // the pinch and draw. Its fingers stay consumed until they lift.
+        if (pinchRef.current) pinchRef.current = null;
+        // A pen "stroke" with no pen contact for seconds is an orphan from a
+        // lost pointerup: commit it and let this fresh pen take over.
+        if (penLooksStale()) endStroke();
+      } else if (e.pointerType === "touch" && e.isPrimary) {
+        // A primary touch means the OS sees no other fingers down — so any
+        // touch bookkeeping still around belongs to lost events.
+        touchPtsRef.current.clear();
+        consumedRef.current.clear();
+        pinchRef.current = null;
+        pendingFillRef.current = null;
+        if (activePointerRef.current?.type === "touch") {
+          endStroke(); // orphaned finger stroke: commit it
+        } else if (penLooksStale()) {
+          // An orphaned pen stroke palm-rejects every finger forever
+          // (undo/redo keep working, drawing goes dead). Release it.
+          endStroke();
+        }
+      }
+      notePenContact(e);
       if (e.pointerType === "touch") {
         touchPtsRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
         if (pinchRef.current || touchPtsRef.current.size > 2) {
@@ -609,7 +726,6 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
           return;
         }
       }
-      if (e.pointerType === "pen" && pinchRef.current) return; // no drawing mid-pinch
       // Palm rejection: fingers don't draw while (or just after) the pencil is in use.
       if (isPalmTouch(e)) return;
       if (activePointerRef.current !== null) {
@@ -624,7 +740,11 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
       (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
       const pt = toCanvasCoords(e);
       if (toolRef.current === "fill") {
-        doFill(pt);
+        if (e.pointerType === "touch") {
+          pendingFillRef.current = { id: e.pointerId, x: e.clientX, y: e.clientY };
+        } else {
+          doFill(pt); // pen/mouse can't pinch — fill immediately
+        }
         return;
       }
       activePointerRef.current = { id: e.pointerId, type: e.pointerType };
@@ -650,7 +770,9 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
     };
 
     const onPointerMove = (e: React.PointerEvent) => {
-      notePenActivity(e);
+      // Only moves with contact refresh the palm guard — a hovering Pencil
+      // (buttons === 0) must not block finger drawing.
+      if (e.buttons !== 0) notePenContact(e);
       if (e.pointerType === "touch" && touchPtsRef.current.has(e.pointerId)) {
         touchPtsRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
         if (pinchRef.current?.ids.includes(e.pointerId)) {
@@ -694,7 +816,7 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
 
     const endStroke = (e?: React.PointerEvent) => {
       if (e) {
-        notePenActivity(e);
+        notePenContact(e);
         if (e.pointerType === "touch") {
           touchPtsRef.current.delete(e.pointerId);
           if (pinchRef.current?.ids.includes(e.pointerId)) {
@@ -706,6 +828,14 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
           }
           if (consumedRef.current.has(e.pointerId)) {
             consumedRef.current.delete(e.pointerId);
+            return;
+          }
+          const pendingFill = pendingFillRef.current;
+          if (pendingFill && pendingFill.id === e.pointerId) {
+            pendingFillRef.current = null;
+            const moved = Math.hypot(e.clientX - pendingFill.x, e.clientY - pendingFill.y);
+            // Commit only a clean tap release — never a cancel or a drag.
+            if (e.type === "pointerup" && moved < 12) doFill(toCanvasCoords(e));
             return;
           }
         }
@@ -735,6 +865,8 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
       if (pending) commitOp({ t: "s", ...pending });
       snapshot();
     };
+    // Keep the window-level lift listener pointed at the current closure.
+    endStrokeRef.current = () => endStroke();
 
     useImperativeHandle(
       ref,
@@ -828,8 +960,21 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
           )}
         </div>
         {!ready && (
-          <div className="absolute inset-0 flex items-center justify-center rounded-2xl bg-white/70 text-sm font-semibold text-slate-500">
-            Preparing your half…
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 rounded-2xl bg-white/70 text-sm font-semibold text-slate-500">
+            {loadFailed ? (
+              <>
+                <span>We couldn&apos;t load this coloring page.</span>
+                <button
+                  type="button"
+                  onClick={() => setLoadAttempt((n) => n + 1)}
+                  className="min-h-11 touch-manipulation rounded-2xl bg-[var(--duos-accent)] px-5 font-bold text-white shadow transition active:scale-95"
+                >
+                  Try again
+                </button>
+              </>
+            ) : (
+              "Preparing your half…"
+            )}
           </div>
         )}
       </div>

@@ -49,6 +49,18 @@ body {
   font-family: var(--font-display), var(--font-body), sans-serif;
 }
 
+/* iPad Safari has no UA default of touch-action: manipulation on form
+   controls (Chromium does), and it ignores user-scalable=no since iOS 10 —
+   so rapid taps on Undo or a tool button can trigger double-tap zoom.
+   Manipulation keeps taps instant and un-zoomable; drawing surfaces override
+   with touch-action: none via .no-touch-scroll. */
+button,
+input,
+select,
+label {
+  touch-action: manipulation;
+}
+
 .no-touch-scroll {
   touch-action: none;
   -webkit-user-select: none;

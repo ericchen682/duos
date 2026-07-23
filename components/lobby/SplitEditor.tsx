@@ -20,6 +20,9 @@ import type {
 } from "@/lib/types";
 
 const PREVIEW_W = 560;
+// Touches this soon after pencil contact are treated as a resting palm
+// (mirrors the coloring canvas's palm guard).
+const TOUCH_REJECT_MS = 500;
 
 const PRESETS: { id: SplitPreset; label: string }[] = [
   { id: "vertical", label: "Vertical" },
@@ -56,6 +59,10 @@ export function SplitEditor({
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const drawingRef = useRef(false);
+  // Exactly one pointer draws the curve. Without this, a palm resting on the
+  // canvas mid-draw resets the whole path (its pointerdown restarted it).
+  const activeDrawIdRef = useRef<number | null>(null);
+  const lastPenTimeRef = useRef(0);
 
   const previewH = Math.round((PREVIEW_W * selectedPage.height) / selectedPage.width);
   const isUploaded = selectedPage.id === "uploaded";
@@ -150,16 +157,35 @@ export function SplitEditor({
   const onDown = (e: React.PointerEvent) => {
     if (mode !== "custom") return;
     e.preventDefault();
+    if (e.pointerType === "pen") {
+      // The pencil always wins: a touch mid-draw was a palm, so its path is
+      // discarded and the pen starts the curve fresh.
+      lastPenTimeRef.current = performance.now();
+    } else if (
+      activeDrawIdRef.current !== null ||
+      (e.pointerType === "touch" &&
+        performance.now() - lastPenTimeRef.current < TOUCH_REJECT_MS)
+    ) {
+      return; // second finger, or a palm resting near the pencil
+    }
     (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+    activeDrawIdRef.current = e.pointerId;
     drawingRef.current = true;
     setCustomPath([toNorm(e)]);
   };
   const onMove = (e: React.PointerEvent) => {
     if (mode !== "custom" || !drawingRef.current) return;
+    if (e.pointerId !== activeDrawIdRef.current) return;
+    if (e.pointerType === "pen" && e.buttons !== 0) {
+      lastPenTimeRef.current = performance.now();
+    }
     e.preventDefault();
     setCustomPath((prev) => [...prev, toNorm(e)]);
   };
-  const onUp = () => {
+  const onUp = (e: React.PointerEvent) => {
+    if (e.pointerId !== activeDrawIdRef.current) return;
+    if (e.pointerType === "pen") lastPenTimeRef.current = performance.now();
+    activeDrawIdRef.current = null;
     if (!drawingRef.current) return;
     drawingRef.current = false;
     render();
