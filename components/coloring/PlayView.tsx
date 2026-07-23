@@ -21,8 +21,6 @@ interface PlayViewProps {
   partnerPresent: boolean;
   onMarkDone: (blob: Blob) => Promise<void>;
   onKeepColoring: () => Promise<void>;
-  /** Local-save key for the in-progress drawing (survives refresh/remount). */
-  persistKey?: string;
 }
 
 export function PlayView({
@@ -36,7 +34,6 @@ export function PlayView({
   partnerPresent,
   onMarkDone,
   onKeepColoring,
-  persistKey,
 }: PlayViewProps) {
   const canvasRef = useRef<ColoringCanvasHandle>(null);
   const { tool, setTool, brushSize, setBrushSize } = useDrawingTools();
@@ -82,7 +79,6 @@ export function PlayView({
       brushSize={brushSize}
       onReadyChange={setReady}
       onHistoryChange={setHistory}
-      persistKey={persistKey}
     />
   );
 
