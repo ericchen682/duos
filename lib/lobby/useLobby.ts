@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getClientId } from "../clientId";
 import { getLobbyByCode, getPlayers, subscribeLobby } from "./api";
 import type { Lobby, Player, PlayerRole } from "../types";
@@ -25,16 +25,24 @@ export function useLobby(code: string): UseLobbyResult {
   const [role, setRole] = useState<PlayerRole | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Whether we've ever loaded this room successfully. After that point a
+  // failed poll must never surface as an error: swapping the play screen for
+  // "Room not found" unmounts the canvas mid-session, and transient failures
+  // are routine on tablets (wifi blips, iOS aborting fetches on background).
+  const hasLoadedRef = useRef(false);
 
   const refresh = useCallback(async () => {
     try {
       const lb = await getLobbyByCode(code);
       if (!lb) {
-        setError("We couldn't find that room. Check the code and try again.");
-        setLoading(false);
+        if (!hasLoadedRef.current) {
+          setError("We couldn't find that room. Check the code and try again.");
+          setLoading(false);
+        }
         return;
       }
       const pl = await getPlayers(lb.id);
+      hasLoadedRef.current = true;
       setLobby(lb);
       setPlayers(pl);
       const mine = pl.find((p) => p.client_id === getClientId());
@@ -42,8 +50,11 @@ export function useLobby(code: string): UseLobbyResult {
       setError(null);
       setLoading(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong.");
-      setLoading(false);
+      if (!hasLoadedRef.current) {
+        setError(err instanceof Error ? err.message : "Something went wrong.");
+        setLoading(false);
+      }
+      // Otherwise: keep the last good state on screen; the 5s poll retries.
     }
   }, [code]);
 
