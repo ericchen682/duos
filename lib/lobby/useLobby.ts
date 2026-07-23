@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { getClientId } from "../clientId";
 import { getLobbyByCode, getPlayers, subscribeLobby } from "./api";
 import type { Lobby, Player, PlayerRole } from "../types";
@@ -26,25 +26,15 @@ export function useLobby(code: string): UseLobbyResult {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Whether we've ever loaded this lobby. Refresh runs on a 5s poll, so a
-  // single transient failure (flaky wifi, a fetch aborted by the tab being
-  // backgrounded) must NOT surface as an error once the room is on screen —
-  // that would swap the play view for "Room not found" and destroy the
-  // player's unsubmitted coloring. Keep showing the last good state instead.
-  const hasLoadedRef = useRef(false);
-
   const refresh = useCallback(async () => {
     try {
       const lb = await getLobbyByCode(code);
       if (!lb) {
-        if (!hasLoadedRef.current) {
-          setError("We couldn't find that room. Check the code and try again.");
-          setLoading(false);
-        }
+        setError("We couldn't find that room. Check the code and try again.");
+        setLoading(false);
         return;
       }
       const pl = await getPlayers(lb.id);
-      hasLoadedRef.current = true;
       setLobby(lb);
       setPlayers(pl);
       const mine = pl.find((p) => p.client_id === getClientId());
@@ -52,10 +42,8 @@ export function useLobby(code: string): UseLobbyResult {
       setError(null);
       setLoading(false);
     } catch (err) {
-      if (!hasLoadedRef.current) {
-        setError(err instanceof Error ? err.message : "Something went wrong.");
-        setLoading(false);
-      }
+      setError(err instanceof Error ? err.message : "Something went wrong.");
+      setLoading(false);
     }
   }, [code]);
 

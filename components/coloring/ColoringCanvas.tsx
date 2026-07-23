@@ -116,9 +116,9 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
     const zoomPillTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const [zoomPct, setZoomPct] = useState(100);
     const [showZoomPill, setShowZoomPill] = useState(false);
-    // Apple Pencil: timestamp of the last pen CONTACT (down/drawing-move/up —
-    // hover deliberately excluded, or a pencil held near the screen would
-    // silently block finger coloring), plus smoothed pressure for width.
+    // Apple Pencil: timestamp of the last pen event (down/move/up, including
+    // hover) so palm touches near pencil use never start strokes, plus a
+    // smoothed pressure for width modulation.
     const lastPenTimeRef = useRef(0);
     const pressureRef = useRef(0.5);
 
@@ -136,8 +136,6 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
     const historyIndexRef = useRef(0);
 
     const [ready, setReady] = useState(false);
-    const [loadFailed, setLoadFailed] = useState(false);
-    const [retryNonce, setRetryNonce] = useState(0);
 
     const emitHistory = useCallback(() => {
       onHistoryChange?.({
@@ -202,33 +200,11 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
     useEffect(() => {
       let cancelled = false;
       setReady(false);
-      setLoadFailed(false);
       onReadyChange?.(false);
 
-      // A flaky connection must not brick the canvas: retry with backoff, and
-      // on total failure surface a retry button instead of the eternal
-      // "Preparing your half…" overlay.
-      const loadImageWithRetry = async (src: string, tries = 3) => {
-        let lastErr: unknown;
-        for (let attempt = 0; attempt < tries; attempt++) {
-          try {
-            return await loadImage(src);
-          } catch (err) {
-            lastErr = err;
-            await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
-            if (cancelled) throw err;
-          }
-        }
-        throw lastErr;
-      };
-
       (async () => {
-        const img = await loadImageWithRetry(pageSrc).catch((err) => {
-          if (!cancelled) setLoadFailed(true);
-          console.error(err);
-          return null;
-        });
-        if (cancelled || !img) return;
+        const img = await loadImage(pageSrc);
+        if (cancelled) return;
         lineImgRef.current = img;
         lineDataRef.current = imageToImageData(img, width, height);
 
@@ -272,7 +248,7 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
         cancelled = true;
       };
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [pageSrc, width, height, role, JSON.stringify(split), retryNonce]);
+    }, [pageSrc, width, height, role, JSON.stringify(split)]);
 
     // Trackpad pinch and ctrl+wheel zoom at the cursor (macOS trackpads emit
     // pinch as ctrl+wheel). Native non-passive listener: React's root wheel
@@ -497,20 +473,6 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
       if (!ready) return;
       e.preventDefault();
       notePenActivity(e);
-      // Self-heal: a primary pointer means no other contacts of its type are
-      // down, so any bookkeeping still around is left over from a missed
-      // pointerup/cancel. Reset it — one dropped event must never wedge the
-      // canvas into a "can't color" state until reload.
-      if (e.isPrimary) {
-        if (e.pointerType === "touch") {
-          touchPtsRef.current.clear();
-          consumedRef.current.clear();
-          pinchRef.current = null;
-        }
-        if (activePointerRef.current?.type === e.pointerType) {
-          endStroke(); // commit whatever the orphaned stroke had painted
-        }
-      }
       if (e.pointerType === "touch") {
         touchPtsRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
         if (pinchRef.current || touchPtsRef.current.size > 2) {
@@ -564,9 +526,7 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
     };
 
     const onPointerMove = (e: React.PointerEvent) => {
-      // Hover moves (pen near the screen, buttons === 0) don't count as pen
-      // activity — only actual contact should suppress finger drawing.
-      if (e.buttons !== 0) notePenActivity(e);
+      notePenActivity(e);
       if (e.pointerType === "touch" && touchPtsRef.current.has(e.pointerId)) {
         touchPtsRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
         if (pinchRef.current?.ids.includes(e.pointerId)) {
@@ -726,21 +686,8 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
           )}
         </div>
         {!ready && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 rounded-2xl bg-white/70 text-sm font-semibold text-slate-500">
-            {loadFailed ? (
-              <>
-                <p>The page didn&apos;t load. Check your connection.</p>
-                <button
-                  type="button"
-                  onClick={() => setRetryNonce((n) => n + 1)}
-                  className="min-h-11 rounded-2xl bg-[var(--duos-accent)] px-5 font-semibold text-white transition active:scale-95"
-                >
-                  Try again
-                </button>
-              </>
-            ) : (
-              "Preparing your half…"
-            )}
+          <div className="absolute inset-0 flex items-center justify-center rounded-2xl bg-white/70 text-sm font-semibold text-slate-500">
+            Preparing your half…
           </div>
         )}
       </div>
