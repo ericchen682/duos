@@ -17,6 +17,15 @@ import {
 } from "@/lib/coloring/imageUtils";
 import { deriveMask } from "@/lib/coloring/mask";
 import {
+  FILL_TOLERANCE,
+  loadPaintLog,
+  prunePaintLogs,
+  removePaintLog,
+  replayPaintLog,
+  savePaintLog,
+} from "@/lib/coloring/paintLog";
+import type { PaintOp, StrokeTool } from "@/lib/coloring/paintLog";
+import {
   HIGHLIGHTER_ALPHA,
   paintHighlighterSegment,
   paintStroke,
@@ -26,6 +35,10 @@ import type { PlayerRole, SplitData } from "@/lib/types";
 import type { Tool } from "@/lib/coloring/strokes";
 
 const MAX_HISTORY = 14;
+
+// Rounding for recorded op-log samples: 0.1px positions, 0.01 width scales.
+const r1 = (v: number) => Math.round(v * 10) / 10;
+const r2 = (v: number) => Math.round(v * 100) / 100;
 
 export interface ColoringCanvasHandle {
   undo: () => void;
@@ -45,6 +58,10 @@ interface ColoringCanvasProps {
   brushSize: number;
   onReadyChange?: (ready: boolean) => void;
   onHistoryChange?: (state: { canUndo: boolean; canRedo: boolean }) => void;
+  /** When set, committed actions are recorded to a local op log under this key
+      and replayed on mount — refreshes and done/keep-coloring remounts keep
+      the drawing. */
+  persistKey?: string;
 }
 
 export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasProps>(
@@ -60,6 +77,7 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
       brushSize,
       onReadyChange,
       onHistoryChange,
+      persistKey,
     },
     ref
   ) {
@@ -170,6 +188,79 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
       if (overlayRef.current) ctx.drawImage(overlayRef.current, 0, 0);
     }, [width, height]);
 
+    // ----- Local persistence (replayable op log) -----
+    // Committed actions (stroke end, fill, clear) are appended to logRef and
+    // saved debounced under persistKey; mount replays the saved log.
+    const logRef = useRef<PaintOp[]>([]);
+    const pendingStrokeRef = useRef<{
+      tool: StrokeTool;
+      color: string;
+      size: number;
+      pts: number[];
+    } | null>(null);
+    const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const persistDirtyRef = useRef(false);
+
+    const flushPersist = useCallback(() => {
+      if (persistTimerRef.current) {
+        clearTimeout(persistTimerRef.current);
+        persistTimerRef.current = null;
+      }
+      if (!persistKey || !persistDirtyRef.current) return;
+      persistDirtyRef.current = false;
+      // Persist only what is visible: drop undone ops (the redo branch), and
+      // everything up to the last clear (a clear resets to a blank layer).
+      let ops = logRef.current;
+      const undone = historyRef.current.length - 1 - historyIndexRef.current;
+      if (undone > 0) ops = ops.slice(0, Math.max(0, ops.length - undone));
+      for (let i = ops.length - 1; i >= 0; i--) {
+        if (ops[i].t === "c") {
+          ops = ops.slice(i + 1);
+          break;
+        }
+      }
+      if (ops.length === 0) removePaintLog(persistKey);
+      else savePaintLog(persistKey, ops, width, height);
+    }, [persistKey, width, height]);
+
+    const schedulePersist = useCallback(() => {
+      if (!persistKey) return;
+      persistDirtyRef.current = true;
+      if (persistTimerRef.current) return;
+      persistTimerRef.current = setTimeout(() => {
+        persistTimerRef.current = null;
+        flushPersist();
+      }, 500);
+    }, [persistKey, flushPersist]);
+
+    // Append a committed op. Must run BEFORE snapshot() so the redo branch
+    // being spliced from history is mirrored by truncating the same number of
+    // undone ops from the log.
+    const commitOp = useCallback((op: PaintOp) => {
+      const undone = historyRef.current.length - 1 - historyIndexRef.current;
+      if (undone > 0) {
+        logRef.current.length = Math.max(0, logRef.current.length - undone);
+      }
+      logRef.current.push(op);
+    }, []);
+
+    // A pending save must survive losing the component or the page. pagehide
+    // plus visibilitychange(hidden) cover refresh, tab close, and mobile
+    // Safari app-switching (which often skips beforeunload).
+    useEffect(() => {
+      const onPageHide = () => flushPersist();
+      const onVisibility = () => {
+        if (document.visibilityState === "hidden") flushPersist();
+      };
+      window.addEventListener("pagehide", onPageHide);
+      document.addEventListener("visibilitychange", onVisibility);
+      return () => {
+        window.removeEventListener("pagehide", onPageHide);
+        document.removeEventListener("visibilitychange", onVisibility);
+        flushPersist();
+      };
+    }, [flushPersist]);
+
     const snapshot = useCallback(() => {
       const ctx = paintCtxRef.current;
       if (!ctx) return;
@@ -183,7 +274,8 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
       }
       historyIndexRef.current = stack.length - 1;
       emitHistory();
-    }, [width, height, emitHistory]);
+      schedulePersist();
+    }, [width, height, emitHistory, schedulePersist]);
 
     const restore = useCallback(
       (index: number) => {
@@ -230,6 +322,27 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
         strokeBufCtxRef.current = sctx;
         highlighterActiveRef.current = false;
 
+        // Restore a locally saved drawing by replaying its op log, then seed
+        // undo history from the restored state.
+        logRef.current = [];
+        pendingStrokeRef.current = null;
+        persistDirtyRef.current = false;
+        if (persistKey) {
+          prunePaintLogs(persistKey);
+          const savedOps = loadPaintLog(persistKey, width, height);
+          if (savedOps && savedOps.length > 0) {
+            replayPaintLog(savedOps, {
+              ctx: pctx,
+              width,
+              height,
+              mask,
+              maskCanvas: maskCanvasRef.current,
+              lineData: lineDataRef.current,
+            });
+            logRef.current = savedOps;
+          }
+        }
+
         historyRef.current = [pctx.getImageData(0, 0, width, height)];
         historyIndexRef.current = 0;
         emitHistory();
@@ -248,7 +361,7 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
         cancelled = true;
       };
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [pageSrc, width, height, role, JSON.stringify(split)]);
+    }, [pageSrc, width, height, role, JSON.stringify(split), persistKey]);
 
     // Trackpad pinch and ctrl+wheel zoom at the cursor (macOS trackpads emit
     // pinch as ctrl+wheel). Native non-passive listener: React's root wheel
@@ -404,6 +517,7 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
       drawingRef.current = false;
       lastRef.current = null;
       activePointerRef.current = null;
+      pendingStrokeRef.current = null;
       if (highlighterActiveRef.current) {
         highlighterActiveRef.current = false;
         strokeBufCtxRef.current?.clearRect(0, 0, width, height);
@@ -460,10 +574,11 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
       if (mask[py * width + px] === 0) return; // outside your half
       const paintData = ctx.getImageData(0, 0, width, height);
       const changed = floodFill(paintData, line, mask, px, py, hexToRgba(color), {
-        tolerance: 48,
+        tolerance: FILL_TOLERANCE,
       });
       if (changed) {
         ctx.putImageData(paintData, 0, 0);
+        if (persistKey) commitOp({ t: "f", color, x: r1(pt.x), y: r1(pt.y) });
         redraw();
         snapshot();
       }
@@ -521,7 +636,16 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
         strokeBufCtxRef.current.clearRect(0, 0, width, height);
         highlighterActiveRef.current = true;
       }
-      strokeSegment(pt, pt, segmentScale(e.pointerType, e.pressure));
+      const scale = segmentScale(e.pointerType, e.pressure);
+      pendingStrokeRef.current = persistKey
+        ? {
+            tool: toolRef.current as StrokeTool,
+            color: colorRef.current,
+            size: sizeRef.current,
+            pts: [r1(pt.x), r1(pt.y), r2(scale)],
+          }
+        : null;
+      strokeSegment(pt, pt, scale);
       redraw();
     };
 
@@ -547,9 +671,21 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
           ? native.getCoalescedEvents()
           : [native];
       let last = lastRef.current ?? toCanvasCoords(samples[0]);
+      const pending = pendingStrokeRef.current;
       for (const sample of samples) {
         const pt = toCanvasCoords(sample);
-        strokeSegment(last, pt, segmentScale(e.pointerType, sample.pressure));
+        const scale = segmentScale(e.pointerType, sample.pressure);
+        strokeSegment(last, pt, scale);
+        if (pending) {
+          // Thin sub-half-pixel samples; replay draws straight segments
+          // between kept points, so dropping these is visually lossless.
+          const m = pending.pts.length;
+          const dx = pt.x - pending.pts[m - 3];
+          const dy = pt.y - pending.pts[m - 2];
+          if (dx * dx + dy * dy >= 0.25) {
+            pending.pts.push(r1(pt.x), r1(pt.y), r2(scale));
+          }
+        }
         last = pt;
       }
       lastRef.current = last;
@@ -594,6 +730,9 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
         }
         redraw();
       }
+      const pending = pendingStrokeRef.current;
+      pendingStrokeRef.current = null;
+      if (pending) commitOp({ t: "s", ...pending });
       snapshot();
     };
 
@@ -605,6 +744,7 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
             historyIndexRef.current -= 1;
             restore(historyIndexRef.current);
             emitHistory();
+            schedulePersist();
           }
         },
         redo() {
@@ -612,12 +752,14 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
             historyIndexRef.current += 1;
             restore(historyIndexRef.current);
             emitHistory();
+            schedulePersist();
           }
         },
         clear() {
           const ctx = paintCtxRef.current;
           if (!ctx) return;
           ctx.clearRect(0, 0, width, height);
+          if (persistKey) commitOp({ t: "c" });
           redraw();
           snapshot();
         },
@@ -629,7 +771,7 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
           });
         },
       }),
-      [restore, emitHistory, redraw, snapshot, width, height]
+      [restore, emitHistory, redraw, snapshot, schedulePersist, commitOp, persistKey, width, height]
     );
 
     return (

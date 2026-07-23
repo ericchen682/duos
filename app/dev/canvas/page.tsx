@@ -109,6 +109,7 @@ export default function DevCanvasPage() {
             brushSize={brushSize}
             onReadyChange={setReady}
             onHistoryChange={setHistory}
+            persistKey={`dev:${role}:${preset}`}
           />
         </div>
       </div>
