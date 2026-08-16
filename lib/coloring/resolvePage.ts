@@ -3,14 +3,24 @@ import type { ColoringPage } from "@/lib/types";
 
 /** Cap canvas raster size so huge uploads stay performant on iPad. */
 export const MAX_CANVAS_EDGE = 1500;
+/**
+ * Cap total pixel count too: every full-canvas operation (mask clipping,
+ * redraw, undo snapshots) scales with area, and iPad Safari kills the tab when
+ * canvas memory climbs. The built-in pages (1000×750 = 0.75MP) are the
+ * known-good baseline; this keeps uploads near it instead of at 2-3× it.
+ * Saved op logs are resolution-independent, so drawings made at the old cap
+ * replay rescaled.
+ */
+export const MAX_CANVAS_PIXELS = 1_000_000;
 
 export function fitCanvasDimensions(
   width: number,
   height: number
 ): { width: number; height: number } {
-  const max = Math.max(width, height);
-  if (max <= MAX_CANVAS_EDGE) return { width, height };
-  const scale = MAX_CANVAS_EDGE / max;
+  const edgeScale = MAX_CANVAS_EDGE / Math.max(width, height);
+  const areaScale = Math.sqrt(MAX_CANVAS_PIXELS / (width * height));
+  const scale = Math.min(1, edgeScale, areaScale);
+  if (scale === 1) return { width, height };
   return {
     width: Math.round(width * scale),
     height: Math.round(height * scale),

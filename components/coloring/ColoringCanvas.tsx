@@ -10,10 +10,10 @@ import {
 } from "react";
 import { floodFill, hexToRgba } from "@/lib/coloring/floodFill";
 import {
-  imageToImageData,
   loadImage,
   maskToCanvas,
   overlayOutsideMask,
+  rasterizeImage,
 } from "@/lib/coloring/imageUtils";
 import { deriveMask } from "@/lib/coloring/mask";
 import {
@@ -37,14 +37,74 @@ import type { Tool } from "@/lib/coloring/strokes";
 const MAX_HISTORY = 14;
 // Undo snapshots are full-canvas ImageData — the app's single biggest
 // allocation. iPad Safari jettisons tabs under memory pressure (a white
-// flash and a reload), so cap history by bytes, not just count: a 1500px
-// uploaded page would otherwise pin ~95MB in snapshots alone. Standard
-// 1000×750 pages still keep all 14 steps under this budget.
-const HISTORY_BYTE_BUDGET = 48 * 1024 * 1024;
+// flash and a reload), and a history stack pinned near the ceiling turned
+// every stroke-end snapshot into a crash-reload loop on uploaded pages.
+// Cap history by bytes, not just count: built-in pages (0.75MP ≈ 3MB per
+// snapshot) get 10 steps, area-capped uploads (1MP ≈ 4MB) get 8.
+const HISTORY_BYTE_BUDGET = 32 * 1024 * 1024;
 
 // Rounding for recorded op-log samples: 0.1px positions, 0.01 width scales.
 const r1 = (v: number) => Math.round(v * 10) / 10;
 const r2 = (v: number) => Math.round(v * 100) / 100;
+
+interface DirtyRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/**
+ * destination-in composite of the mask over a layer, optionally restricted to
+ * a dirty rect via a clip path. Without the clip, the composite touches every
+ * pixel of the layer — running that per coalesced pencil sample (up to ~240/s)
+ * is what made drawing lag behind the pencil on large pages while the eraser
+ * (which skips clipping) stayed smooth. The mask is idempotent, so clipping
+ * only where the segment painted gives an identical result.
+ */
+function applyMaskClip(
+  ctx: CanvasRenderingContext2D,
+  maskCanvas: HTMLCanvasElement,
+  dirty?: DirtyRect
+) {
+  ctx.save();
+  if (dirty) {
+    ctx.beginPath();
+    ctx.rect(dirty.x, dirty.y, dirty.w, dirty.h);
+    ctx.clip();
+  }
+  ctx.globalCompositeOperation = "destination-in";
+  ctx.drawImage(maskCanvas, 0, 0);
+  ctx.restore();
+}
+
+/** Bounding box of a stroke segment, padded past the widest tool footprint
+    (highlighter chisel is size*1.35 wide; crayon grain scatters further). */
+function segmentDirtyRect(
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+  size: number
+): DirtyRect {
+  const pad = size * 1.5 + 2;
+  return {
+    x: Math.min(from.x, to.x) - pad,
+    y: Math.min(from.y, to.y) - pad,
+    w: Math.abs(to.x - from.x) + pad * 2,
+    h: Math.abs(to.y - from.y) + pad * 2,
+  };
+}
+
+/**
+ * Free a canvas's backing store immediately. iPad Safari reclaims zeroed
+ * canvases right away but collects abandoned ones lazily, and a page over its
+ * canvas-memory quota starts rendering canvases black.
+ */
+function releaseCanvas(canvas: HTMLCanvasElement | null) {
+  if (canvas) {
+    canvas.width = 0;
+    canvas.height = 0;
+  }
+}
 
 export interface ColoringCanvasHandle {
   undo: () => void;
@@ -92,7 +152,10 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
     // Offscreen state.
     const paintRef = useRef<HTMLCanvasElement | null>(null);
     const paintCtxRef = useRef<CanvasRenderingContext2D | null>(null);
-    const lineImgRef = useRef<HTMLImageElement | null>(null);
+    // Line art pre-rasterized at canvas size: redraw() composites it every
+    // pointermove, and drawing from the original <img> would resample the
+    // full-resolution upload each frame (and pin its decoded bitmap).
+    const lineCanvasRef = useRef<HTMLCanvasElement | null>(null);
     const lineDataRef = useRef<ImageData | null>(null);
     const maskRef = useRef<Uint8Array | null>(null);
     const maskCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -180,7 +243,7 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
     const redraw = useCallback(() => {
       const display = displayRef.current;
       const paint = paintRef.current;
-      const line = lineImgRef.current;
+      const line = lineCanvasRef.current;
       if (!display || !paint || !line) return;
       const ctx = display.getContext("2d");
       if (!ctx) return;
@@ -333,8 +396,9 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
           setLoadFailed(true);
           return;
         }
-        lineImgRef.current = img;
-        lineDataRef.current = imageToImageData(img, width, height);
+        const rasterized = rasterizeImage(img, width, height);
+        lineCanvasRef.current = rasterized.canvas;
+        lineDataRef.current = rasterized.data;
 
         const mask = deriveMask(width, height, split, role);
         maskRef.current = mask;
@@ -395,6 +459,24 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
 
       return () => {
         cancelled = true;
+        // Free the old backing stores now instead of waiting for GC — done/
+        // keep-coloring remounts and page retries would otherwise briefly hold
+        // two full sets of canvases, and iPad Safari's canvas quota is the
+        // difference between drawing and a black screen.
+        releaseCanvas(paintRef.current);
+        paintRef.current = null;
+        paintCtxRef.current = null;
+        releaseCanvas(strokeBufRef.current);
+        strokeBufRef.current = null;
+        strokeBufCtxRef.current = null;
+        releaseCanvas(maskCanvasRef.current);
+        maskCanvasRef.current = null;
+        releaseCanvas(overlayRef.current);
+        overlayRef.current = null;
+        releaseCanvas(lineCanvasRef.current);
+        lineCanvasRef.current = null;
+        lineDataRef.current = null;
+        maskRef.current = null;
       };
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [pageSrc, width, height, role, JSON.stringify(split), persistKey, loadAttempt]);
@@ -616,13 +698,11 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
       restore(historyIndexRef.current);
     };
 
-    const clipToMask = () => {
+    const clipToMask = (dirty?: DirtyRect) => {
       const ctx = paintCtxRef.current;
       const maskCanvas = maskCanvasRef.current;
       if (!ctx || !maskCanvas) return;
-      ctx.globalCompositeOperation = "destination-in";
-      ctx.drawImage(maskCanvas, 0, 0);
-      ctx.globalCompositeOperation = "source-over";
+      applyMaskClip(ctx, maskCanvas, dirty);
     };
 
     const strokeSegment = (
@@ -640,9 +720,7 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
         if (!sctx) return;
         paintHighlighterSegment(sctx, from, to, size, colorRef.current);
         if (maskCanvas) {
-          sctx.globalCompositeOperation = "destination-in";
-          sctx.drawImage(maskCanvas, 0, 0);
-          sctx.globalCompositeOperation = "source-over";
+          applyMaskClip(sctx, maskCanvas, segmentDirtyRect(from, to, size));
         }
         return;
       }
@@ -651,7 +729,7 @@ export const ColoringCanvas = forwardRef<ColoringCanvasHandle, ColoringCanvasPro
       if (currentTool === "fill") return;
 
       paintStroke(ctx, from, to, currentTool, size, colorRef.current);
-      if (currentTool !== "eraser") clipToMask();
+      if (currentTool !== "eraser") clipToMask(segmentDirtyRect(from, to, size));
     };
 
     const doFill = (pt: { x: number; y: number }) => {

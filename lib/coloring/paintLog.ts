@@ -258,4 +258,12 @@ export function replayPaintLog(ops: PaintOp[], env: ReplayEnv): void {
     // equivalent (destination-in with the same mask is idempotent) and faster.
     if (op.tool !== "eraser") clip(ctx);
   }
+
+  // Zeroing the scratch buffer releases its backing store immediately; iPad
+  // Safari only reclaims abandoned canvases lazily, and replay runs right at
+  // page load when memory pressure decides whether the tab survives.
+  if (scratch) {
+    scratch.canvas.width = 0;
+    scratch.canvas.height = 0;
+  }
 }
