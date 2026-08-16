@@ -43,8 +43,16 @@ export function useLobby(code: string): UseLobbyResult {
       }
       const pl = await getPlayers(lb.id);
       hasLoadedRef.current = true;
-      setLobby(lb);
-      setPlayers(pl);
+      // Fresh fetches mean fresh object identities even when nothing changed,
+      // and the 5s poll would re-render the whole play screen (canvas
+      // included) every tick — a visible hitch mid-stroke on iPad. Keep the
+      // previous state when the payload is identical so React bails out.
+      setLobby((prev) =>
+        prev && JSON.stringify(prev) === JSON.stringify(lb) ? prev : lb
+      );
+      setPlayers((prev) =>
+        JSON.stringify(prev) === JSON.stringify(pl) ? prev : pl
+      );
       const mine = pl.find((p) => p.client_id === getClientId());
       setRole(mine?.role ?? null);
       setError(null);

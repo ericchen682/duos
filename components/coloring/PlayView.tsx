@@ -124,34 +124,22 @@ export function PlayView({
         </div>
       </div>
 
-      {isDone ? (
-        <div className="mx-auto w-full max-w-3xl space-y-4">
-          {canvas}
-          <Panel className="border-emerald-200 bg-emerald-50/80 text-center">
-            <p className="font-display text-lg font-bold text-emerald-800">
-              Your half is submitted
-            </p>
-            <p className="mt-1 text-sm text-emerald-700">
-              {partnerDone
-                ? "Revealing the finished drawing…"
-                : "Waiting for your partner to finish."}
-            </p>
-            {!partnerDone && (
-              <Button
-                variant="secondary"
-                size="sm"
-                className="mt-4"
-                onClick={onKeepColoring}
-              >
-                Keep coloring
-              </Button>
-            )}
-          </Panel>
-        </div>
-      ) : (
-        /* Main area: tool rail left, canvas center, color picker right on md+;
-           stacked bars above the canvas below md (today's phone behavior). */
-        <div className="space-y-4 md:flex md:items-start md:gap-4 md:space-y-0">
+      {/* One tree for both states, with the canvas in a stable slot: an
+          isDone ternary that swaps whole subtrees would unmount and fully
+          re-initialize ColoringCanvas (a complete set of offscreen canvases,
+          replayed from the op log) on every done/keep-coloring toggle —
+          real memory churn on iPad Safari. Only the chrome around the canvas
+          may be conditional. */}
+      <div
+        className={
+          isDone
+            ? "mx-auto w-full max-w-3xl"
+            : "space-y-4 md:flex md:items-start md:gap-4 md:space-y-0"
+        }
+      >
+        {!isDone && (
+          /* Tool rail left, canvas center, color picker right on md+;
+             stacked bars above the canvas below md (today's phone behavior). */
           <div className="sticky top-2 z-20 flex flex-col gap-2 overflow-visible md:contents">
             <Panel className="overflow-visible bg-[var(--duos-surface)]/95 p-2 backdrop-blur-md md:order-1 md:sticky md:top-2 md:z-20 md:shrink-0 md:self-start">
               <div className="md:hidden">
@@ -178,9 +166,36 @@ export function PlayView({
               <ColorPicker color={color} onChange={setColor} layout="compact" />
             </Panel>
           </div>
+        )}
 
-          <div className="min-w-0 space-y-4 md:order-2 md:flex-1">
-            {canvas}
+        <div
+          className={
+            isDone ? "space-y-4" : "min-w-0 space-y-4 md:order-2 md:flex-1"
+          }
+        >
+          {canvas}
+          {isDone ? (
+            <Panel className="border-emerald-200 bg-emerald-50/80 text-center">
+              <p className="font-display text-lg font-bold text-emerald-800">
+                Your half is submitted
+              </p>
+              <p className="mt-1 text-sm text-emerald-700">
+                {partnerDone
+                  ? "Revealing the finished drawing…"
+                  : "Waiting for your partner to finish."}
+              </p>
+              {!partnerDone && (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  className="mt-4"
+                  onClick={onKeepColoring}
+                >
+                  Keep coloring
+                </Button>
+              )}
+            </Panel>
+          ) : (
             <Button
               variant="success"
               size="lg"
@@ -190,9 +205,9 @@ export function PlayView({
             >
               {submitting ? "Submitting…" : "I'm done — submit my half"}
             </Button>
-          </div>
+          )}
         </div>
-      )}
+      </div>
     </div>
   );
 }

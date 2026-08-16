@@ -9,19 +9,25 @@ export function loadImage(src: string): Promise<HTMLImageElement> {
   });
 }
 
-/** Draw an image into an offscreen canvas at the given size and read its pixels. */
-export function imageToImageData(
+/**
+ * Rasterize an image into a canvas at the given size and read its pixels once.
+ * The canvas is what per-frame code should draw from — a multi-megapixel
+ * upload resampled on every redraw keeps its full decoded bitmap alive and
+ * burns time per frame; this pays that cost once. Callers should drop the
+ * source image afterwards so the decode can be reclaimed.
+ */
+export function rasterizeImage(
   img: HTMLImageElement,
   width: number,
   height: number
-): ImageData {
+): { canvas: HTMLCanvasElement; data: ImageData } {
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
-  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("Canvas 2D context unavailable");
   ctx.drawImage(img, 0, 0, width, height);
-  return ctx.getImageData(0, 0, width, height);
+  return { canvas, data: ctx.getImageData(0, 0, width, height) };
 }
 
 /** Build an opaque-white-inside canvas from a mask, for destination-in clipping. */
